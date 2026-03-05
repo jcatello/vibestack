@@ -21,14 +21,13 @@
 
 On a fresh AlmaLinux 9 install, run the setup command to install the base dependencies, configure the global Nginx settings, and arm the CSF firewall.
 
-chmod +x vibestack.sh
-./vibestack.sh setup
+chmod +x vibestack.sh && ./vibestack.sh setup
 
 ### 2. Adding a New Site
 
 Provision a new site with a specific PHP version. This command creates the user, the directory structure, the database, the PHP pool, and the SSH keys.
 
-./vibestack.sh example.com 8.4
+./vibestack.sh example.com 8.5
 
 ### 3. Removing a Site
 
