@@ -1,6 +1,6 @@
 #!/bin/bash
 # /opt/vibestack/modules/core_nginx.sh
-# Module: Base User, Directory, SSH, and Nginx Vhost Setup
+# Module: Base User, Directory, SSH, and Nginx Vhost Setup (Mainline + Native ACME)
 
 # --- 0. MANDATORY INCLUDES ---
 [ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
@@ -22,8 +22,8 @@ fi
 # Ensure the nginx service can read the user's files
 usermod -a -G "$USER_NAME" nginx
 
-# Create the Fortress directory structure
-mkdir -p "$WEB_ROOT"/{public,logs,.ssh,ssl,tmp}
+# Create the Fortress directory structure (SSL directory removed, handled by Nginx native state)
+mkdir -p "$WEB_ROOT"/{public,logs,.ssh,tmp}
 
 # --- 4. SSH KEY GENERATION (ED25519) ---
 if [ ! -f "$WEB_ROOT/.ssh/id_ed25519" ]; then
@@ -35,31 +35,40 @@ fi
 
 PRIVATE_KEY=$(cat "$WEB_ROOT/.ssh/id_ed25519")
 
-# --- 5. SSL PLACEHOLDER (Self-Signed) ---
-if [ ! -f "$WEB_ROOT/ssl/selfsigned.crt" ]; then
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$WEB_ROOT/ssl/selfsigned.key" \
-        -out "$WEB_ROOT/ssl/selfsigned.crt" \
-        -subj "/CN=$DOMAIN" > /dev/null 2>&1
-fi
-
-# Apply ownership to all generated files
+# Apply ownership and lock down the web root
 chown -R "$USER_NAME:$USER_NAME" "$WEB_ROOT"
-
-# Lock down the web root (750 ensures only the user and the nginx group can enter)
 chmod 750 "$WEB_ROOT"
 
-# --- 6. NGINX VHOST CONFIGURATION ---
+# --- 5. NGINX VHOST CONFIGURATION (Native ACME) ---
 # We build the config dynamically based on what the router requested
 cat << EOF > /etc/nginx/conf.d/$DOMAIN.conf
+# HTTP to HTTPS Redirect
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN www.$DOMAIN;
+    
+    # The ACME module automatically hooks into port 80 to intercept challenges.
+    # Everything else gets redirected to HTTPS.
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+# HTTPS Server Block
 server {
     listen 443 ssl;
-    server_name $DOMAIN;
+    listen [::]:443 ssl;
+    server_name $DOMAIN www.$DOMAIN;
+    
     root $WEB_ROOT/public;
     index index.php index.html;
 
-    ssl_certificate $WEB_ROOT/ssl/selfsigned.crt;
-    ssl_certificate_key $WEB_ROOT/ssl/selfsigned.key;
+    # Nginx Native ACME Integration
+    # 'LetEncrypt' maps to the acme_issuer defined in your global 00-default.conf
+    acme_certificate LetEncrypt;
+    ssl_certificate \$acme_certificate;
+    ssl_certificate_key \$acme_certificate_key;
     
     access_log $WEB_ROOT/logs/access.log;
     error_log $WEB_ROOT/logs/error.log;
@@ -94,7 +103,7 @@ cat << EOF >> /etc/nginx/conf.d/$DOMAIN.conf
 }
 EOF
 
-# --- 7. LOGROTATE CONFIGURATION ---
+# --- 6. LOGROTATE CONFIGURATION ---
 cat << EOF > /etc/logrotate.d/$DOMAIN
 $WEB_ROOT/logs/*.log {
     daily
@@ -111,15 +120,15 @@ $WEB_ROOT/logs/*.log {
 }
 EOF
 
-# --- 8. STATE & JSON RESPONSE UPDATES ---
-# Flag the router to reload Nginx at the end of the run
+# --- 7. STATE & JSON RESPONSE UPDATES ---
+# Flag the router to validate and reload Nginx at the end of the run
 REQUIRE_NGINX_RELOAD=1
 
 # Safely inject the new data into the master MODULE_RESULT JSON object using jq
-MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
-    --arg domain "$DOMAIN" \
-    --arg ip "$SERVER_IP" \
-    --arg user "$USER_NAME" \
-    --arg root "$WEB_ROOT/public" \
-    --arg key "$PRIVATE_KEY" \
-    '. + {domain: $domain, server_ip: $ip, username: $user, web_root: $root, ssh_private_key: $key}')
+MODULE_RESULT=\$(echo "\$MODULE_RESULT" | jq \
+    --arg domain "\$DOMAIN" \
+    --arg ip "\$SERVER_IP" \
+    --arg user "\$USER_NAME" \
+    --arg root "\$WEB_ROOT/public" \
+    --arg key "\$PRIVATE_KEY" \
+    '. + {domain: \$domain, server_ip: \$ip, username: \$user, web_root: \$root, ssh_private_key: \$key}')
