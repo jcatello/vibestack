@@ -14,6 +14,7 @@ WP_ADMIN_EMAIL=$5
 WP_LOCALE=$6
 WP_PLUGINS=$7
 WP_THEMES=$8
+WITH_PHP=${9:-"8.4"}   # PHP version — passed from vibestack-api.sh
 
 # --- 2. VALIDATION ---
 [[ -z "$DOMAIN" ]]         && fatal_error 1006 "Domain missing in app_wp.sh"
@@ -33,21 +34,41 @@ DB_PASS=$(echo "$MODULE_RESULT" | jq -r '.db_pass // empty')
 [[ -z "$DB_NAME" ]] && fatal_error 1007 "Database credentials missing. Ensure --with-db was passed."
 
 # --- 3. WP-CLI DEPENDENCY ---
-if ! command -v wp &> /dev/null; then
+WP_BIN="/usr/local/bin/wp"
+if [ ! -f "$WP_BIN" ]; then
     curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x wp-cli.phar
-    mv wp-cli.phar /usr/local/bin/wp
+    mv wp-cli.phar "$WP_BIN"
 fi
+
+# PHP binary — use the Remi versioned binary matching the site's PHP version
+PHP_PKG_VER="${WITH_PHP//./}"
+PHP_BIN="/opt/remi/php${PHP_PKG_VER}/root/usr/bin/php"
+
+# Fallback to system php if versioned binary not found
+[ ! -f "$PHP_BIN" ] && PHP_BIN="/usr/bin/php"
+[ ! -f "$PHP_BIN" ] && fatal_error 1008 "No PHP binary found for version ${WITH_PHP}"
+
+# WP runner: always use full paths, set PHP binary explicitly
+# sudo -u runs as site user; PATH is set explicitly to avoid login shell issues
+wp_run() {
+    sudo -u "$USER_NAME" \
+        PHP_BINARY="$PHP_BIN" \
+        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        "$PHP_BIN" "$WP_BIN" "$@"
+}
 
 # --- 4. CORE DOWNLOAD ---
 # --skip-content omits default themes/plugins (twenty*, hello, akismet)
-sudo -u "$USER_NAME" -i wp core download \
+wp_run core download \
     --path="$WEB_ROOT/public" \
     --skip-content \
     --quiet
 
+[ $? -ne 0 ] && fatal_error 1009 "wp core download failed for ${DOMAIN}"
+
 # --- 5. WP-CONFIG ---
-sudo -u "$USER_NAME" -i wp config create \
+wp_run config create \
     --path="$WEB_ROOT/public" \
     --dbname="$DB_NAME" \
     --dbuser="$DB_USER" \
@@ -55,10 +76,11 @@ sudo -u "$USER_NAME" -i wp config create \
     --dbhost="localhost" \
     --quiet
 
+[ $? -ne 0 ] && fatal_error 1010 "wp config create failed for ${DOMAIN}"
+
 # --- 6. CORE INSTALL ---
-# Build command as array so locale can be cleanly optional
-WP_INSTALL_CMD=(
-    sudo -u "$USER_NAME" -i wp core install
+WP_INSTALL_ARGS=(
+    core install
     --path="$WEB_ROOT/public"
     --url="https://${DOMAIN}"
     --title="$WP_TITLE"
@@ -69,17 +91,16 @@ WP_INSTALL_CMD=(
     --quiet
 )
 
-if [[ -n "$WP_LOCALE" ]]; then
-    WP_INSTALL_CMD+=(--locale="$WP_LOCALE")
-fi
+[[ -n "$WP_LOCALE" ]] && WP_INSTALL_ARGS+=(--locale="$WP_LOCALE")
 
-"${WP_INSTALL_CMD[@]}"
+wp_run "${WP_INSTALL_ARGS[@]}"
+[ $? -ne 0 ] && fatal_error 1011 "wp core install failed for ${DOMAIN}"
 
 # --- 7. PLUGINS ---
 if [[ -n "$WP_PLUGINS" ]]; then
     IFS=',' read -ra PLUGINS <<< "$WP_PLUGINS"
     for plugin in "${PLUGINS[@]}"; do
-        sudo -u "$USER_NAME" -i wp plugin install "$plugin" \
+        wp_run plugin install "$plugin" \
             --activate \
             --path="$WEB_ROOT/public" \
             --quiet
@@ -90,7 +111,7 @@ fi
 if [[ -n "$WP_THEMES" ]]; then
     IFS=',' read -ra THEMES <<< "$WP_THEMES"
     for theme in "${THEMES[@]}"; do
-        sudo -u "$USER_NAME" -i wp theme install "$theme" \
+        wp_run theme install "$theme" \
             --path="$WEB_ROOT/public" \
             --quiet
     done
