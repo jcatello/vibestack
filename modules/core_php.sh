@@ -20,6 +20,7 @@ PHP_PKG="php${PHP_PKG_VER}"
 # --- 2. DEPENDENCY CHECK (Enterprise Package List) ---
 PHP_DEPENDENCIES=(
     "${PHP_PKG}"
+    "${PHP_PKG}-php-cli"
     "${PHP_PKG}-php-fpm"
     "${PHP_PKG}-php-devel"
     "${PHP_PKG}-php-embedded"
