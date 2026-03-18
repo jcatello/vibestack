@@ -3,13 +3,14 @@
 # Module: PHP-FPM Pool Provisioning
 
 # --- 0. MANDATORY INCLUDES ---
-[ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
+source /opt/vibestack/includes/common.sh
 
 # --- 1. VALIDATION ---
 DOMAIN=$1
 WITH_PHP=$2
 
-[[ -z "$DOMAIN" || -z "$WITH_PHP" ]] && fatal_error 1004 "Domain or PHP version missing in core_php.sh"
+[[ -z "$DOMAIN" ]] && fatal_error 1004 "Domain missing in core_php.sh"
+[[ -z "$WITH_PHP" ]] && fatal_error 1004 "PHP version missing in core_php.sh"
 
 USER_NAME=${DOMAIN//./_}
 WEB_ROOT="/home/nginx/domains/$DOMAIN"
@@ -17,7 +18,6 @@ PHP_PKG_VER="${WITH_PHP//./}"
 PHP_PKG="php${PHP_PKG_VER}"
 
 # --- 2. DEPENDENCY CHECK (Enterprise Package List) ---
-# Build the dynamic array of packages based on the requested PHP version
 PHP_DEPENDENCIES=(
     "${PHP_PKG}"
     "${PHP_PKG}-php-fpm"
@@ -63,8 +63,7 @@ PHP_DEPENDENCIES=(
     "oniguruma5php-devel"
 )
 
-# Install if the core FPM package is missing
-if ! rpm -q ${PHP_PKG}-php-fpm >/dev/null 2>&1; then
+if ! rpm -q "${PHP_PKG}-php-fpm" >/dev/null 2>&1; then
     dnf install -y "${PHP_DEPENDENCIES[@]}" >/dev/null 2>&1
 fi
 
@@ -87,8 +86,8 @@ php_admin_value[session.save_path] = $WEB_ROOT/tmp
 php_admin_value[memory_limit] = 256M
 EOF
 
-# --- 4. WP-CLI WRAPPER GENERATION ---
-# Automatically create wpXX (e.g., wp84) for this specific PHP version if it doesn't exist
+# --- 4. WP-CLI VERSIONED WRAPPER ---
+# Creates e.g. /usr/local/bin/wp84 for PHP 8.4 specifically
 if [ ! -f "/usr/local/bin/wp${PHP_PKG_VER}" ]; then
     cat << EOF > "/usr/local/bin/wp${PHP_PKG_VER}"
 #!/bin/bash
@@ -97,7 +96,7 @@ EOF
     chmod +x "/usr/local/bin/wp${PHP_PKG_VER}"
 fi
 
-# Ensure a global 'php' binary exists (defaults to the first one installed)
+# Ensure a global 'php' symlink exists (defaults to first installed version)
 if [ ! -f "/usr/bin/php" ]; then
     ln -sf "/opt/remi/${PHP_PKG}/root/usr/bin/php" /usr/bin/php
 fi
