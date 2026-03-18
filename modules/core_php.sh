@@ -16,12 +16,56 @@ WEB_ROOT="/home/nginx/domains/$DOMAIN"
 PHP_PKG_VER="${WITH_PHP//./}"
 PHP_PKG="php${PHP_PKG_VER}"
 
-# --- 2. DEPENDENCY CHECK ---
-# Ensure the specific PHP version and common extensions are installed
+# --- 2. DEPENDENCY CHECK (Enterprise Package List) ---
+# Build the dynamic array of packages based on the requested PHP version
+PHP_DEPENDENCIES=(
+    "${PHP_PKG}"
+    "${PHP_PKG}-php-fpm"
+    "${PHP_PKG}-php-devel"
+    "${PHP_PKG}-php-embedded"
+    "${PHP_PKG}-php-mysqlnd"
+    "${PHP_PKG}-php-bcmath"
+    "${PHP_PKG}-php-enchant"
+    "${PHP_PKG}-php-gd"
+    "${PHP_PKG}-php-pecl-geoip"
+    "${PHP_PKG}-php-gmp"
+    "${PHP_PKG}-php-pecl-igbinary"
+    "${PHP_PKG}-php-pecl-igbinary-devel"
+    "${PHP_PKG}-php-pecl-imagick-im6"
+    "${PHP_PKG}-php-pecl-imagick-im6-devel"
+    "${PHP_PKG}-php-imap"
+    "${PHP_PKG}-php-intl"
+    "${PHP_PKG}-php-pecl-json-post"
+    "${PHP_PKG}-php-ldap"
+    "${PHP_PKG}-php-pecl-mailparse"
+    "${PHP_PKG}-php-mbstring"
+    "${PHP_PKG}-php-mcrypt"
+    "${PHP_PKG}-php-pecl-memcache"
+    "${PHP_PKG}-php-pecl-memcached"
+    "${PHP_PKG}-php-pecl-mysql"
+    "${PHP_PKG}-php-pdo-dblib"
+    "${PHP_PKG}-php-pspell"
+    "${PHP_PKG}-php-pecl-redis5"
+    "${PHP_PKG}-php-snmp"
+    "${PHP_PKG}-php-soap"
+    "${PHP_PKG}-php-tidy"
+    "${PHP_PKG}-php-xml"
+    "${PHP_PKG}-php-xmlrpc"
+    "${PHP_PKG}-php-pecl-zip"
+    "${PHP_PKG}-php-opcache"
+    "${PHP_PKG}-php-sodium"
+    "${PHP_PKG}-php-brotli"
+    "${PHP_PKG}-php-zstd"
+    "${PHP_PKG}-php-zstd-devel"
+    "${PHP_PKG}-php-process"
+    "libsodium-devel"
+    "oniguruma5php"
+    "oniguruma5php-devel"
+)
+
+# Install if the core FPM package is missing
 if ! rpm -q ${PHP_PKG}-php-fpm >/dev/null 2>&1; then
-    dnf install -y ${PHP_PKG}-php-fpm ${PHP_PKG}-php-mysqlnd ${PHP_PKG}-php-opcache \
-                   ${PHP_PKG}-php-gd ${PHP_PKG}-php-mbstring ${PHP_PKG}-php-xml \
-                   ${PHP_PKG}-php-bcmath ${PHP_PKG}-php-intl -y >/dev/null 2>&1
+    dnf install -y "${PHP_DEPENDENCIES[@]}" >/dev/null 2>&1
 fi
 
 # --- 3. FPM POOL CONFIGURATION ---
@@ -43,11 +87,24 @@ php_admin_value[session.save_path] = $WEB_ROOT/tmp
 php_admin_value[memory_limit] = 256M
 EOF
 
-# --- 4. STATE & JSON RESPONSE UPDATES ---
-# Add this specific version to the reload queue
+# --- 4. WP-CLI WRAPPER GENERATION ---
+# Automatically create wpXX (e.g., wp84) for this specific PHP version if it doesn't exist
+if [ ! -f "/usr/local/bin/wp${PHP_PKG_VER}" ]; then
+    cat << EOF > "/usr/local/bin/wp${PHP_PKG_VER}"
+#!/bin/bash
+/opt/remi/${PHP_PKG}/root/usr/bin/php /usr/local/bin/wp "\$@"
+EOF
+    chmod +x "/usr/local/bin/wp${PHP_PKG_VER}"
+fi
+
+# Ensure a global 'php' binary exists (defaults to the first one installed)
+if [ ! -f "/usr/bin/php" ]; then
+    ln -sf "/opt/remi/${PHP_PKG}/root/usr/bin/php" /usr/bin/php
+fi
+
+# --- 5. STATE & JSON RESPONSE UPDATES ---
 RELOAD_PHP_VERSIONS+=" $PHP_PKG_VER"
 
-# Inject PHP info into the final JSON response
 MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
     --arg php "$WITH_PHP" \
     '. + {php_version: $php}')
