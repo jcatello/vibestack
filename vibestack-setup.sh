@@ -1,12 +1,13 @@
 #!/bin/bash
+# /opt/vibestack/vibestack-setup.sh
 # Vibe-Stack Pro: Base Server Provisioning (AlmaLinux 9)
 # Mainline Edition with Native ACME & Hostname SSL
 
 # --- 0. MANDATORY INCLUDES ---
-[ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
+source /opt/vibestack/includes/common.sh
 
 echo "===================================================="
-echo "          VIBE-STACK GLOBAL SETUP (MAINLINE)        "
+echo "        VIBE-STACK GLOBAL SETUP (MAINLINE)          "
 echo "===================================================="
 
 # 1. Add Official Nginx Repository (Mainline Branch)
@@ -35,15 +36,14 @@ if ! grep -q "ngx_http_acme_module.so" /etc/nginx/nginx.conf; then
 fi
 
 # 5. Standardized Paths & Cleanup
-mkdir -p /usr/local/nginx/conf /home/nginx/domains
-ln -s /etc/nginx/conf.d /usr/local/nginx/conf/conf.d
+mkdir -p /home/nginx/domains
 rm -f /etc/nginx/conf.d/default.conf
 
-# PHP Socket Persistence
+# PHP Socket Persistence (Fixes AlmaLinux 9 tmpfs wipe on reboot)
 echo "d /run/php-fpm 0755 nginx nginx -" > /etc/tmpfiles.d/php-fpm.conf
 mkdir -p /run/php-fpm && chown nginx:nginx /run/php-fpm
 
-# 6. Global HTTPS Redirect & Default ACME Handling
+# 6. Global HTTPS Redirect & Native ACME State Directory
 mkdir -p /var/lib/nginx/acme
 chown nginx:nginx /var/lib/nginx/acme
 chmod 700 /var/lib/nginx/acme
@@ -58,13 +58,13 @@ acme_issuer letsencrypt {
     accept_terms_of_service;
 }
 
-# The global Port 80 catcher. ACME module intercepts challenges here natively.
+# Global Port 80 catcher — ACME module intercepts challenges natively
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    
-    location / { 
-        return 301 https://$host$request_uri; 
+
+    location / {
+        return 301 https://$host$request_uri;
     }
 }
 EOF
@@ -72,7 +72,7 @@ EOF
 # 7. Hostname SSL Provisioning
 SERVER_HOSTNAME=$(hostname -f)
 if [[ -n "$SERVER_HOSTNAME" && "$SERVER_HOSTNAME" != "localhost" ]]; then
-cat << EOF > /etc/nginx/conf.d/01-hostname.conf
+    cat << EOF > /etc/nginx/conf.d/01-hostname.conf
 server {
     listen 80;
     listen [::]:80;
@@ -103,7 +103,7 @@ unzip -oq csf.zip && cd csf && sh install.sh
 
 CONF="/etc/csf/csf.conf"
 sed -i 's/^TESTING = "1"/TESTING = "0"/' $CONF
-sed -i 's/^IPV6 = "1"/IPV6 = "0"/' $CONF 
+sed -i 's/^IPV6 = "1"/IPV6 = "0"/' $CONF
 sed -i 's/^LF_IPSET = "0"/LF_IPSET = "1"/' $CONF
 sed -i 's/^LF_IPSET_MAXELEM = .*/LF_IPSET_MAXELEM = "4000000"/' $CONF
 sed -i 's/^TCP_IN = .*/TCP_IN = "20,21,22,25,53,80,443,2222"/' $CONF
@@ -112,39 +112,43 @@ BLOCK="/etc/csf/csf.blocklists"
 sed -i 's|^#CSF_MASTER|CSF_MASTER|' $BLOCK
 sed -i 's|^#CSF_HIGHRISK|CSF_HIGHRISK|' $BLOCK
 
-# 9. Start Base Services
+# 9. Secure the Vibestack config file
+chmod 600 /opt/vibestack/config/vibestack.conf
+chmod 700 /opt/vibestack/config
+
+# 10. Start Base Services
 systemctl enable --now nginx mariadb postfix
 csf -ra && systemctl restart lfd
 
-# 10. API Directory Prep
-mkdir -p /opt/vibestack/{modules,logs,config}
+# 11. Phone Home
+SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
+CONTAINER_UUID=$(cat /etc/machine-id 2>/dev/null || echo "unknown-uuid")
+INSTALL_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# 11. Phone Home Configuration
-SERVER_IP=\$(curl -s https://api.ipify.org || hostname -I | awk '{print \$1}')
-CONTAINER_UUID=\$(cat /etc/machine-id 2>/dev/null || echo "unknown-uuid")
-INSTALL_DATE=\$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-PHONE_HOME_JSON=\$(jq -n \
+PHONE_HOME_JSON=$(jq -n \
     --arg hostname "$SERVER_HOSTNAME" \
-    --arg ip "\$SERVER_IP" \
-    --arg uuid "\$CONTAINER_UUID" \
-    --arg date "\$INSTALL_DATE" \
+    --arg ip "$SERVER_IP" \
+    --arg uuid "$CONTAINER_UUID" \
+    --arg date "$INSTALL_DATE" \
     '{
         success: true,
         errors: [],
         messages: ["Vibe-Stack base provisioning complete"],
         result: {
-            hostname: \$hostname,
-            ip: \$ip,
-            lxd_uuid: \$uuid,
-            completed_at: \$date
+            hostname: $hostname,
+            ip: $ip,
+            lxd_uuid: $uuid,
+            completed_at: $date
         }
     }')
 
+THREAD_TS=$(send_slack_initial "✅ *Vibe-Stack Setup Complete* on \`$SERVER_HOSTNAME\` (\`$SERVER_IP\`)" "alerts")
+send_slack_thread "$THREAD_TS" "\`\`\`$PHONE_HOME_JSON\`\`\`" "alerts"
+
 echo "===================================================="
-echo "          SETUP COMPLETE. PHONING HOME...           "
+echo "        SETUP COMPLETE. PHONING HOME...             "
 echo "===================================================="
-echo "\$PHONE_HOME_JSON"
+echo "$PHONE_HOME_JSON"
 echo "===================================================="
-echo "Nginx Version: \$(nginx -v 2>&1)"
-echo "You can now drop your API files into /opt/vibestack/"
+echo "Nginx Version: $(nginx -v 2>&1)"
+echo "Vibestack is ready at /opt/vibestack/"
