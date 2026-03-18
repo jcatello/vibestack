@@ -1,7 +1,10 @@
 #!/bin/bash
 # Vibe-Stack Pro: Base Server Provisioning (AlmaLinux 9)
-# Mainline Edition with Native ACME Support
+# Mainline Edition with Native ACME & Hostname SSL
 # Run this ONCE on a fresh OS before deploying the API.
+
+# --- MANDATORY INCLUDES ---
+[ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
 
 echo "===================================================="
 echo "          VIBE-STACK GLOBAL SETUP (MAINLINE)        "
@@ -69,7 +72,35 @@ server {
 }
 EOF
 
-# 7. Install ConfigServer Security & Firewall (CSF)
+# 7. Hostname SSL Provisioning
+SERVER_HOSTNAME=$(hostname -f)
+if [[ -n "$SERVER_HOSTNAME" && "$SERVER_HOSTNAME" != "localhost" ]]; then
+cat << EOF > /etc/nginx/conf.d/01-hostname.conf
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $SERVER_HOSTNAME;
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $SERVER_HOSTNAME;
+
+    acme_certificate LetEncrypt;
+    ssl_certificate \$acme_certificate;
+    ssl_certificate_key \$acme_certificate_key;
+
+    location / {
+        default_type text/plain;
+        return 200 "Vibe-Stack Host Node: $SERVER_HOSTNAME is online and secure.\n";
+    }
+}
+EOF
+fi
+
+# 8. Install ConfigServer Security & Firewall (CSF)
 cd /usr/src && wget https://download.configserver.dev/csf.zip
 unzip -oq csf.zip && cd csf && sh install.sh
 
@@ -84,20 +115,21 @@ BLOCK="/etc/csf/csf.blocklists"
 sed -i 's|^#CSF_MASTER|CSF_MASTER|' $BLOCK
 sed -i 's|^#CSF_HIGHRISK|CSF_HIGHRISK|' $BLOCK
 
-# 8. Start Base Services
+# 9. Start Base Services
+# Starting Nginx here will automatically trigger the ACME module to fetch the hostname SSL
 systemctl enable --now nginx mariadb postfix
 csf -ra && systemctl restart lfd
 
-# 9. API Directory Prep
+# 10. API Directory Prep
 mkdir -p /opt/vibestack/{modules,logs,config}
 
-# 10. Phone Home Configuration
+# 11. Phone Home Configuration
 SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
-CONTAINER_UUID=$(cat /etc/machine-id)
+CONTAINER_UUID=$(cat /etc/machine-id 2>/dev/null || echo "unknown-uuid")
 INSTALL_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 PHONE_HOME_JSON=$(jq -n \
-    --arg hostname "$(hostname)" \
+    --arg hostname "$SERVER_HOSTNAME" \
     --arg ip "$SERVER_IP" \
     --arg uuid "$CONTAINER_UUID" \
     --arg date "$INSTALL_DATE" \
