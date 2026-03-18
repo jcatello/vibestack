@@ -98,8 +98,15 @@ PHP_DEPENDENCIES=(
     "oniguruma5php-devel"
 )
 
+# Install full package list if FPM is missing
 if ! rpm -q "${PHP_PKG}-php-fpm" >/dev/null 2>&1; then
     dnf install -y "${PHP_DEPENDENCIES[@]}" >/dev/null 2>&1
+fi
+
+# Always ensure zip is present — required by WP-CLI core download
+# May be missing if PHP was pre-installed before this package was added
+if ! rpm -q "${PHP_PKG}-php-pecl-zip" >/dev/null 2>&1; then
+    dnf install -y "${PHP_PKG}-php-pecl-zip" >/dev/null 2>&1
 fi
 
 # --- 4. FPM POOL CONFIGURATION ---
