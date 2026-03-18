@@ -47,7 +47,7 @@ server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN www.$DOMAIN;
-    
+
     location / {
         return 301 https://\$host\$request_uri;
     }
@@ -59,15 +59,15 @@ server {
     listen [::]:443 ssl;
     http2 on;
     server_name $DOMAIN www.$DOMAIN;
-    
+
     # Nginx Native ACME Integration
     acme_certificate letsencrypt;
     ssl_certificate \$acme_certificate;
     ssl_certificate_key \$acme_certificate_key;
-    
+
     root $WEB_ROOT/public;
     index index.php index.html;
-    
+
     access_log $WEB_ROOT/logs/access.log;
     error_log $WEB_ROOT/logs/error.log;
 
