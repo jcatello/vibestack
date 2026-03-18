@@ -15,8 +15,13 @@ WEB_ROOT="/home/nginx/domains/$DOMAIN"
 SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
 
 # --- 3. LINUX USER & ISOLATION ---
+if ! getent group "$USER_NAME" &>/dev/null; then
+    groupadd "$USER_NAME"
+fi
+
+# Create the user and explicitly assign it to the group
 if ! id "$USER_NAME" &>/dev/null; then
-    useradd -m -d "$WEB_ROOT" -s /bin/bash "$USER_NAME"
+    useradd -m -d "$WEB_ROOT" -s /bin/bash -g "$USER_NAME" "$USER_NAME"
 fi
 
 usermod -a -G "$USER_NAME" nginx
