@@ -22,9 +22,9 @@ EOF
 dnf install -y epel-release
 dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
 
-# 3. Install Base Dependencies (Replaced Certbot with native ACME module)
+# 3. Install Base Dependencies (Includes native ACME, jq, and iptables for CSF)
 dnf install -y nginx nginx-module-acme mariadb-server curl wget unzip \
-               logrotate openssl ipset perl-libwww-perl bind-utils \
+               logrotate openssl ipset iptables perl-libwww-perl bind-utils \
                postfix jq
 
 # 4. Load the ACME Module into Nginx
@@ -42,26 +42,27 @@ echo "d /run/php-fpm 0755 nginx nginx -" > /etc/tmpfiles.d/php-fpm.conf
 mkdir -p /run/php-fpm && chown nginx:nginx /run/php-fpm
 
 # 6. Global HTTPS Redirect & Default ACME Handling
-# We set up a default state directory for the native ACME client to store account keys
+# Set up a default state directory for the native ACME client to store account keys
 mkdir -p /var/lib/nginx/acme
 chown nginx:nginx /var/lib/nginx/acme
 chmod 700 /var/lib/nginx/acme
 
 cat << 'EOF' > /etc/nginx/conf.d/00-default.conf
 # Global ACME configuration
-acme_client LetEncrypt https://acme-v02.api.letsencrypt.org/directory;
-acme_state_dir /var/lib/nginx/acme;
+resolver 1.1.1.1 8.8.8.8 valid=300s;
+
+acme_issuer LetEncrypt {
+    uri https://acme-v02.api.letsencrypt.org/directory;
+    state_path /var/lib/nginx/acme;
+    accept_terms_of_service;
+}
 
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
     
-    # Let Nginx handle the ACME challenge natively, then redirect everything else
-    location /.well-known/acme-challenge/ { 
-        acme_challenge LetEncrypt; 
-    }
-    
+    # The native ACME module automatically intercepts HTTP-01 challenges on port 80
     location / { 
         return 301 https://$host$request_uri; 
     }
@@ -90,8 +91,38 @@ csf -ra && systemctl restart lfd
 # 9. API Directory Prep
 mkdir -p /opt/vibestack/{modules,logs,config}
 
+# 10. Phone Home Configuration
+SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
+CONTAINER_UUID=$(cat /etc/machine-id)
+INSTALL_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+PHONE_HOME_JSON=$(jq -n \
+    --arg hostname "$(hostname)" \
+    --arg ip "$SERVER_IP" \
+    --arg uuid "$CONTAINER_UUID" \
+    --arg date "$INSTALL_DATE" \
+    '{
+        success: true,
+        errors: [],
+        messages: ["Vibe-Stack base provisioning complete"],
+        result: {
+            hostname: $hostname,
+            ip: $ip,
+            lxd_uuid: $uuid,
+            completed_at: $date
+        }
+    }')
+
 echo "===================================================="
-echo "Setup Complete."
+echo "          SETUP COMPLETE. PHONING HOME...           "
+echo "===================================================="
+echo "$PHONE_HOME_JSON"
+echo "===================================================="
 echo "Nginx Version: $(nginx -v 2>&1)"
 echo "You can now drop your API files into /opt/vibestack/"
-echo "===================================================="
+
+# Placeholder for your actual WPO backend API call:
+# curl -s -X POST "https://api.wpo.bigscoots.com/v1/server/register" \
+#      -H "Content-Type: application/json" \
+#      -H "Authorization: Bearer YOUR_TOKEN" \
+#      -d "$PHONE_HOME_JSON"
