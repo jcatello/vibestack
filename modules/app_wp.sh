@@ -5,12 +5,22 @@
 # --- 0. MANDATORY INCLUDES ---
 source /opt/vibestack/includes/common.sh
 
-# --- 1. VALIDATION ---
+# --- 1. ARGUMENTS (all passed from vibestack-api.sh) ---
 DOMAIN=$1
-WP_PLUGINS=$2
-WP_THEMES=$3
+WP_TITLE=$2
+WP_ADMIN_USER=$3
+WP_ADMIN_PASS=$4
+WP_ADMIN_EMAIL=$5
+WP_LOCALE=$6
+WP_PLUGINS=$7
+WP_THEMES=$8
 
-[[ -z "$DOMAIN" ]] && fatal_error 1006 "Domain missing in app_wp.sh"
+# --- 2. VALIDATION ---
+[[ -z "$DOMAIN" ]]         && fatal_error 1006 "Domain missing in app_wp.sh"
+[[ -z "$WP_TITLE" ]]       && fatal_error 1006 "WP site title missing in app_wp.sh"
+[[ -z "$WP_ADMIN_USER" ]]  && fatal_error 1006 "WP admin username missing in app_wp.sh"
+[[ -z "$WP_ADMIN_PASS" ]]  && fatal_error 1006 "WP admin password missing in app_wp.sh"
+[[ -z "$WP_ADMIN_EMAIL" ]] && fatal_error 1006 "WP admin email missing in app_wp.sh"
 
 USER_NAME=${DOMAIN//./_}
 WEB_ROOT="/home/nginx/domains/$DOMAIN"
@@ -22,18 +32,21 @@ DB_PASS=$(echo "$MODULE_RESULT" | jq -r '.db_pass // empty')
 
 [[ -z "$DB_NAME" ]] && fatal_error 1007 "Database credentials missing. Ensure --with-db was passed."
 
-# --- 2. WP-CLI DEPENDENCY ---
+# --- 3. WP-CLI DEPENDENCY ---
 if ! command -v wp &> /dev/null; then
     curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 fi
 
-# --- 3. CORE DOWNLOAD & CONFIG ---
+# --- 4. CORE DOWNLOAD ---
+# --skip-content omits default themes/plugins (twenty*, hello, akismet)
 sudo -u "$USER_NAME" -i wp core download \
     --path="$WEB_ROOT/public" \
+    --skip-content \
     --quiet
 
+# --- 5. WP-CONFIG ---
 sudo -u "$USER_NAME" -i wp config create \
     --path="$WEB_ROOT/public" \
     --dbname="$DB_NAME" \
@@ -42,23 +55,27 @@ sudo -u "$USER_NAME" -i wp config create \
     --dbhost="localhost" \
     --quiet
 
-# --- 4. CORE INSTALL ---
-# Generate a secure admin password and use the domain as the site title placeholder
-WP_ADMIN_PASS=$(openssl rand -base64 16)
-WP_ADMIN_USER="admin"
-WP_ADMIN_EMAIL="admin@${DOMAIN}"
-
-sudo -u "$USER_NAME" -i wp core install \
-    --path="$WEB_ROOT/public" \
-    --url="https://${DOMAIN}" \
-    --title="${DOMAIN}" \
-    --admin_user="$WP_ADMIN_USER" \
-    --admin_password="$WP_ADMIN_PASS" \
-    --admin_email="$WP_ADMIN_EMAIL" \
-    --skip-email \
+# --- 6. CORE INSTALL ---
+# Build command as array so locale can be cleanly optional
+WP_INSTALL_CMD=(
+    sudo -u "$USER_NAME" -i wp core install
+    --path="$WEB_ROOT/public"
+    --url="https://${DOMAIN}"
+    --title="$WP_TITLE"
+    --admin_user="$WP_ADMIN_USER"
+    --admin_password="$WP_ADMIN_PASS"
+    --admin_email="$WP_ADMIN_EMAIL"
+    --skip-email
     --quiet
+)
 
-# --- 5. PLUGINS ---
+if [[ -n "$WP_LOCALE" ]]; then
+    WP_INSTALL_CMD+=(--locale="$WP_LOCALE")
+fi
+
+"${WP_INSTALL_CMD[@]}"
+
+# --- 7. PLUGINS ---
 if [[ -n "$WP_PLUGINS" ]]; then
     IFS=',' read -ra PLUGINS <<< "$WP_PLUGINS"
     for plugin in "${PLUGINS[@]}"; do
@@ -69,7 +86,7 @@ if [[ -n "$WP_PLUGINS" ]]; then
     done
 fi
 
-# --- 6. THEMES ---
+# --- 8. THEMES ---
 if [[ -n "$WP_THEMES" ]]; then
     IFS=',' read -ra THEMES <<< "$WP_THEMES"
     for theme in "${THEMES[@]}"; do
@@ -79,10 +96,21 @@ if [[ -n "$WP_THEMES" ]]; then
     done
 fi
 
-# --- 7. STATE & JSON RESPONSE UPDATES ---
+# --- 9. STATE & JSON RESPONSE UPDATES ---
 MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
     --arg app "wordpress" \
+    --arg wp_url "https://${DOMAIN}" \
+    --arg wp_title "$WP_TITLE" \
     --arg wp_user "$WP_ADMIN_USER" \
     --arg wp_pass "$WP_ADMIN_PASS" \
     --arg wp_email "$WP_ADMIN_EMAIL" \
-    '. + {app: $app, wp_admin_user: $wp_user, wp_admin_pass: $wp_pass, wp_admin_email: $wp_email}')
+    --arg wp_locale "${WP_LOCALE:-en_US}" \
+    '. + {
+        app: $app,
+        wp_url: $wp_url,
+        wp_title: $wp_title,
+        wp_admin_user: $wp_user,
+        wp_admin_pass: $wp_pass,
+        wp_admin_email: $wp_email,
+        wp_locale: $wp_locale
+    }')
