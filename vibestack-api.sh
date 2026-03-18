@@ -190,7 +190,7 @@ case "$ACTION" in
         if [[ "$APP_TYPE" == "wordpress" || "$APP_TYPE" == "wp" ]]; then
             source /opt/vibestack/modules/app_wp.sh \
                 "$DOMAIN" "$WP_TITLE" "$WP_ADMIN_USER" "$WP_ADMIN_PASS" \
-                "$WP_ADMIN_EMAIL" "$WP_LOCALE" "$WP_PLUGINS" "$WP_THEMES" \
+                "$WP_ADMIN_EMAIL" "$WP_LOCALE" "$WP_PLUGINS" "$WP_THEMES" "$WITH_PHP" \
                 >> /opt/vibestack/logs/api-actions.log 2>&1
             validate_module_result "app_wp.sh"
         fi
