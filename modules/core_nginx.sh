@@ -1,6 +1,6 @@
 #!/bin/bash
 # /opt/vibestack/modules/core_nginx.sh
-# Module: Base User, Directory, SSH, and Nginx Vhost Setup (Mainline + Native ACME)
+# Module: Base User, Directory, SSH, and Nginx Vhost Setup
 
 # --- 0. MANDATORY INCLUDES ---
 [ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
@@ -19,10 +19,7 @@ if ! id "$USER_NAME" &>/dev/null; then
     useradd -m -d "$WEB_ROOT" -s /bin/bash "$USER_NAME"
 fi
 
-# Ensure the nginx service can read the user's files
 usermod -a -G "$USER_NAME" nginx
-
-# Create the Fortress directory structure (SSL directory removed, handled by Nginx native state)
 mkdir -p "$WEB_ROOT"/{public,logs,.ssh,tmp}
 
 # --- 4. SSH KEY GENERATION (ED25519) ---
@@ -35,21 +32,17 @@ fi
 
 PRIVATE_KEY=$(cat "$WEB_ROOT/.ssh/id_ed25519")
 
-# Apply ownership and lock down the web root
 chown -R "$USER_NAME:$USER_NAME" "$WEB_ROOT"
 chmod 750 "$WEB_ROOT"
 
 # --- 5. NGINX VHOST CONFIGURATION (Native ACME) ---
-# We build the config dynamically based on what the router requested
 cat << EOF > /etc/nginx/conf.d/$DOMAIN.conf
-# HTTP to HTTPS Redirect
+# HTTP Server Block (Redirects to HTTPS, ACME natively intercepts)
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN www.$DOMAIN;
     
-    # The ACME module automatically hooks into port 80 to intercept challenges.
-    # Everything else gets redirected to HTTPS.
     location / {
         return 301 https://\$host\$request_uri;
     }
@@ -59,16 +52,16 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+    http2 on;
     server_name $DOMAIN www.$DOMAIN;
+    
+    # Nginx Native ACME Integration
+    acme_certificate letsencrypt;
+    ssl_certificate \$acme_certificate;
+    ssl_certificate_key \$acme_certificate_key;
     
     root $WEB_ROOT/public;
     index index.php index.html;
-
-    # Nginx Native ACME Integration
-    # 'LetEncrypt' maps to the acme_issuer defined in your global 00-default.conf
-    acme_certificate LetEncrypt;
-    ssl_certificate \$acme_certificate;
-    ssl_certificate_key \$acme_certificate_key;
     
     access_log $WEB_ROOT/logs/access.log;
     error_log $WEB_ROOT/logs/error.log;
@@ -80,7 +73,7 @@ server {
     }
 EOF
 
-# Conditionally inject PHP-FPM routing only if PHP was requested
+# Conditionally inject PHP-FPM routing
 if [[ -n "$WITH_PHP" ]]; then
     cat << EOF >> /etc/nginx/conf.d/$DOMAIN.conf
 
@@ -94,7 +87,7 @@ if [[ -n "$WITH_PHP" ]]; then
 EOF
 fi
 
-# Close out the server block with standard security defaults
+# Close out the server block
 cat << EOF >> /etc/nginx/conf.d/$DOMAIN.conf
 
     location ~ /\. { deny all; }
@@ -121,10 +114,8 @@ $WEB_ROOT/logs/*.log {
 EOF
 
 # --- 7. STATE & JSON RESPONSE UPDATES ---
-# Flag the router to validate and reload Nginx at the end of the run
 REQUIRE_NGINX_RELOAD=1
 
-# Safely inject the new data into the master MODULE_RESULT JSON object using jq
 MODULE_RESULT=\$(echo "\$MODULE_RESULT" | jq \
     --arg domain "\$DOMAIN" \
     --arg ip "\$SERVER_IP" \
