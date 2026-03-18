@@ -3,7 +3,7 @@
 # Module: Complete Site Purge
 
 # --- 0. MANDATORY INCLUDES ---
-[ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
+source /opt/vibestack/includes/common.sh
 
 # --- 1. VALIDATION ---
 DOMAIN=$1
@@ -20,13 +20,11 @@ if [ -f "/etc/nginx/conf.d/$DOMAIN.conf" ]; then
 fi
 
 # --- 3. PHP-FPM CLEANUP ---
-# Find and remove any FPM pool associated with this domain, regardless of PHP version
+# Find and remove FPM pools for this domain across all PHP versions
 for pool in /etc/opt/remi/php*/php-fpm.d/$DOMAIN.conf; do
     if [ -f "$pool" ]; then
-        # Extract the version number directly from the path (e.g., gets "84" from "/etc/opt/remi/php84/...")
         PHP_PKG_VER=$(echo "$pool" | grep -oP 'php\K\d+')
         rm -f "$pool"
-        # Queue this specific version for a reload
         RELOAD_PHP_VERSIONS+=" $PHP_PKG_VER"
     fi
 done
@@ -34,11 +32,12 @@ done
 # --- 4. DATABASE CLEANUP ---
 mysql -e "DROP DATABASE IF EXISTS \`${DB_NAME}\`;"
 mysql -e "DROP USER IF EXISTS '${DB_NAME}'@'localhost';"
+mysql -e "FLUSH PRIVILEGES;"
 
 # --- 5. FILESYSTEM & USER CLEANUP ---
 rm -f "/etc/logrotate.d/$DOMAIN"
 
-# Remove nginx from the site's group so the group can be cleanly deleted
+# Remove nginx from the site group before deleting it
 gpasswd -d nginx "$USER_NAME" >/dev/null 2>&1
 
 userdel -r "$USER_NAME" >/dev/null 2>&1
@@ -46,4 +45,4 @@ groupdel "$USER_NAME" >/dev/null 2>&1
 
 rm -rf "$WEB_ROOT"
 
-# The master router handles the JSON response for the remove action, so we don't need to append to MODULE_RESULT here.
+# The API router (vibestack-api.sh) handles the final JSON response for remove_site
