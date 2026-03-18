@@ -7,12 +7,54 @@ CONFIG_FILE="/opt/vibestack/config/vibestack.conf"
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 else
-    echo "FATAL: Missing config file at $CONFIG_FILE" >&2
+    echo '{"success":false,"errors":[{"code":1,"message":"FATAL: Missing config file at /opt/vibestack/config/vibestack.conf"}],"messages":[],"result":null}'
     exit 1
 fi
 
 export SLACK_WEBHOOK_URL
 export SLACK_TOKEN
+export CONTAINER_NAME
+export SERVICE_ID
+export ZFS_NODE
+export ZFS_LXD_BASE
+
+# --- API RESPONSE FUNCTIONS ---
+
+# Output a fatal error in Cloudflare JSON format and exit 1
+# Usage: fatal_error <code> "message"
+fatal_error() {
+    local code=$1
+    local msg=$2
+    printf '{"success":false,"errors":[{"code":%s,"message":"%s"}],"messages":[],"result":null}\n' \
+        "$code" "$msg"
+    exit 1
+}
+
+# --- UID VERIFICATION ---
+# Every API call must pass --uid matching this container's CONTAINER_NAME.
+# Prevents WPO from accidentally firing commands at the wrong container.
+# Usage: verify_uid <uid_from_api_call>
+verify_uid() {
+    local incoming_uid=$1
+
+    if [[ -z "$incoming_uid" ]]; then
+        fatal_error 2000 "Missing required parameter: --uid"
+    fi
+
+    if [[ "$incoming_uid" != "$CONTAINER_NAME" ]]; then
+        # Fire Slack alert — this should never happen in production
+        local hostname
+        hostname=$(hostname -f)
+        THREAD_TS=$(send_slack_initial \
+            "🚨 *UID MISMATCH* on \`${hostname}\` (service \`${SERVICE_ID}\`) — Expected: \`${CONTAINER_NAME}\` — Received: \`${incoming_uid}\`" \
+            "alerts")
+        send_slack_thread "$THREAD_TS" \
+            "A WPO API call was rejected because the UID did not match the container. This may indicate a routing error in WPO." \
+            "alerts"
+
+        fatal_error 2001 "UID mismatch: expected ${CONTAINER_NAME}, received ${incoming_uid}"
+    fi
+}
 
 # --- SLACK FUNCTIONS ---
 
@@ -41,16 +83,4 @@ send_slack_thread() {
             -d "{\"message\": \"$message\", \"channel\": \"$channel\", \"parent_msg_id\": \"$thread_id\"}" \
         > /dev/null
     fi
-}
-
-# --- API RESPONSE FUNCTIONS ---
-
-# Output a fatal error in Cloudflare JSON format and exit 1
-# Usage: fatal_error <code> "message"
-fatal_error() {
-    local code=$1
-    local msg=$2
-    printf '{"success":false,"errors":[{"code":%s,"message":"%s"}],"messages":[],"result":null}\n' \
-        "$code" "$msg"
-    exit 1
 }
