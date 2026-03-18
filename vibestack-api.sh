@@ -14,6 +14,11 @@ DOMAIN=""
 APP_TYPE="custom"
 WITH_PHP=""
 WITH_DB=0
+WP_TITLE=""
+WP_ADMIN_USER=""
+WP_ADMIN_PASS=""
+WP_ADMIN_EMAIL=""
+WP_LOCALE=""
 WP_PLUGINS=""
 WP_THEMES=""
 
@@ -70,13 +75,18 @@ cf_respond() {
 # --- 3. DYNAMIC ARGUMENT PARSER ---
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --action=*)     ACTION="${1#*=}" ;;
-        --domain=*)     DOMAIN="${1#*=}" ;;
-        --app-type=*)   APP_TYPE="${1#*=}" ;;
-        --with-php=*)   WITH_PHP="${1#*=}" ;;
-        --with-db)      WITH_DB=1 ;;
-        --wp-plugins=*) WP_PLUGINS="${1#*=}" ;;
-        --wp-themes=*)  WP_THEMES="${1#*=}" ;;
+        --action=*)        ACTION="${1#*=}" ;;
+        --domain=*)        DOMAIN="${1#*=}" ;;
+        --app-type=*)      APP_TYPE="${1#*=}" ;;
+        --with-php=*)      WITH_PHP="${1#*=}" ;;
+        --with-db)         WITH_DB=1 ;;
+        --wp-title=*)      WP_TITLE="${1#*=}" ;;
+        --wp-admin-user=*) WP_ADMIN_USER="${1#*=}" ;;
+        --wp-admin-pass=*) WP_ADMIN_PASS="${1#*=}" ;;
+        --wp-admin-email=*) WP_ADMIN_EMAIL="${1#*=}" ;;
+        --wp-locale=*)     WP_LOCALE="${1#*=}" ;;
+        --wp-plugins=*)    WP_PLUGINS="${1#*=}" ;;
+        --wp-themes=*)     WP_THEMES="${1#*=}" ;;
         *) fatal_error 1000 "Unknown parameter: $1" ;;
     esac
     shift
@@ -87,6 +97,11 @@ done
 if [[ "$APP_TYPE" == "wordpress" || "$APP_TYPE" == "wp" ]]; then
     WITH_PHP=${WITH_PHP:-"8.4"}
     WITH_DB=1
+    # Validate all required WP fields are present
+    [[ -z "$WP_TITLE" ]]       && fatal_error 1010 "Missing required parameter: --wp-title"
+    [[ -z "$WP_ADMIN_USER" ]]  && fatal_error 1011 "Missing required parameter: --wp-admin-user"
+    [[ -z "$WP_ADMIN_PASS" ]]  && fatal_error 1012 "Missing required parameter: --wp-admin-pass"
+    [[ -z "$WP_ADMIN_EMAIL" ]] && fatal_error 1013 "Missing required parameter: --wp-admin-email"
 fi
 
 # --- 5. HELPER: Validate MODULE_RESULT is still valid JSON after each module ---
@@ -125,7 +140,10 @@ case "$ACTION" in
 
         # 4. App Layer: WordPress (conditional)
         if [[ "$APP_TYPE" == "wordpress" || "$APP_TYPE" == "wp" ]]; then
-            source /opt/vibestack/modules/app_wp.sh "$DOMAIN" "$WP_PLUGINS" "$WP_THEMES" >> /opt/vibestack/logs/api-actions.log 2>&1
+            source /opt/vibestack/modules/app_wp.sh \
+                "$DOMAIN" "$WP_TITLE" "$WP_ADMIN_USER" "$WP_ADMIN_PASS" \
+                "$WP_ADMIN_EMAIL" "$WP_LOCALE" "$WP_PLUGINS" "$WP_THEMES" \
+                >> /opt/vibestack/logs/api-actions.log 2>&1
             validate_module_result "app_wp.sh"
         fi
 
