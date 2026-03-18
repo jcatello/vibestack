@@ -37,7 +37,13 @@ mysql -e "DROP USER IF EXISTS '${DB_NAME}'@'localhost';"
 
 # --- 5. FILESYSTEM & USER CLEANUP ---
 rm -f "/etc/logrotate.d/$DOMAIN"
+
+# Remove nginx from the site's group so the group can be cleanly deleted
+gpasswd -d nginx "$USER_NAME" >/dev/null 2>&1
+
 userdel -r "$USER_NAME" >/dev/null 2>&1
+groupdel "$USER_NAME" >/dev/null 2>&1
+
 rm -rf "$WEB_ROOT"
 
 # The master router handles the JSON response for the remove action, so we don't need to append to MODULE_RESULT here.
