@@ -3,7 +3,7 @@
 # Module: Base User, Directory, SSH, and Nginx Vhost Setup
 
 # --- 0. MANDATORY INCLUDES ---
-[ -f /bigscoots/includes/common.sh ] && source /bigscoots/includes/common.sh
+source /opt/vibestack/includes/common.sh
 
 # --- 1. VALIDATION ---
 DOMAIN=$1
@@ -19,7 +19,6 @@ if ! getent group "$USER_NAME" &>/dev/null; then
     groupadd "$USER_NAME"
 fi
 
-# Create the user and explicitly assign it to the group
 if ! id "$USER_NAME" &>/dev/null; then
     useradd -m -d "$WEB_ROOT" -s /bin/bash -g "$USER_NAME" "$USER_NAME"
 fi
@@ -42,7 +41,7 @@ chmod 750 "$WEB_ROOT"
 
 # --- 5. NGINX VHOST CONFIGURATION (Native ACME) ---
 cat << EOF > /etc/nginx/conf.d/$DOMAIN.conf
-# HTTP Server Block (Redirects to HTTPS, ACME natively intercepts)
+# HTTP Server Block (Redirects to HTTPS, ACME natively intercepts challenges)
 server {
     listen 80;
     listen [::]:80;
@@ -60,7 +59,7 @@ server {
     http2 on;
     server_name $DOMAIN www.$DOMAIN;
 
-    # Nginx Native ACME Integration
+    # Nginx Native ACME — handles both apex and www automatically
     acme_certificate letsencrypt;
     ssl_certificate \$acme_certificate;
     ssl_certificate_key \$acme_certificate_key;
@@ -69,7 +68,7 @@ server {
     index index.php index.html;
 
     access_log $WEB_ROOT/logs/access.log;
-    error_log $WEB_ROOT/logs/error.log;
+    error_log  $WEB_ROOT/logs/error.log;
 
     client_max_body_size 128M;
 
@@ -78,7 +77,7 @@ server {
     }
 EOF
 
-# Conditionally inject PHP-FPM routing
+# Conditionally inject PHP-FPM routing block
 if [[ -n "$WITH_PHP" ]]; then
     cat << EOF >> /etc/nginx/conf.d/$DOMAIN.conf
 
@@ -92,12 +91,12 @@ if [[ -n "$WITH_PHP" ]]; then
 EOF
 fi
 
-# Close out the server block
+# Close the server block
 cat << EOF >> /etc/nginx/conf.d/$DOMAIN.conf
 
-    location ~ /\. { deny all; }
+    location ~ /\.          { deny all; }
     location = /favicon.ico { log_not_found off; access_log off; }
-    location = /robots.txt { log_not_found off; access_log off; allow all; }
+    location = /robots.txt  { log_not_found off; access_log off; allow all; }
 }
 EOF
 
@@ -121,10 +120,10 @@ EOF
 # --- 7. STATE & JSON RESPONSE UPDATES ---
 REQUIRE_NGINX_RELOAD=1
 
-MODULE_RESULT=\$(echo "\$MODULE_RESULT" | jq \
-    --arg domain "\$DOMAIN" \
-    --arg ip "\$SERVER_IP" \
-    --arg user "\$USER_NAME" \
-    --arg root "\$WEB_ROOT/public" \
-    --arg key "\$PRIVATE_KEY" \
-    '. + {domain: \$domain, server_ip: \$ip, username: \$user, web_root: \$root, ssh_private_key: \$key}')
+MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
+    --arg domain "$DOMAIN" \
+    --arg ip "$SERVER_IP" \
+    --arg user "$USER_NAME" \
+    --arg root "$WEB_ROOT/public" \
+    --arg key "$PRIVATE_KEY" \
+    '. + {domain: $domain, server_ip: $ip, username: $user, web_root: $root, ssh_private_key: $key}')
