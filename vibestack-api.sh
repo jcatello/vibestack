@@ -302,6 +302,27 @@ case "$ACTION" in
         ;;
 
 # =============================================================================
+# BASIC AUTH
+# =============================================================================
+
+    "basic_auth")
+        [[ -z "$DOMAIN" ]]     && fatal_error 1001 "Missing: --domain"
+        [[ -z "$SUB_ACTION" ]] && fatal_error 1014 "Missing: --sub-action (enable_site|disable_site|enable_wplogin|disable_wplogin|update_credentials|list)"
+        run_module /opt/vibestack/modules/nginx/basic_auth.sh "$SUB_ACTION" "$DOMAIN" "$PAYLOAD"
+        cf_respond "true" "$MODULE_RESULT" "[]" "[\"Basic auth action '${SUB_ACTION}' completed for ${DOMAIN}.\"]"
+        ;;
+
+# =============================================================================
+# PHPMYADMIN
+# =============================================================================
+
+    "phpmyadmin")
+        [[ -z "$SUB_ACTION" ]] && fatal_error 1014 "Missing: --sub-action (rotate_path|rotate_credentials|get_info)"
+        run_module /opt/vibestack/modules/system/phpmyadmin.sh "$SUB_ACTION"
+        cf_respond "true" "$MODULE_RESULT" "[]" "[\"phpMyAdmin action '${SUB_ACTION}' completed.\"]"
+        ;;
+
+# =============================================================================
 # SYSTEM / CONTAINER INFO
 # =============================================================================
 
@@ -350,6 +371,6 @@ case "$ACTION" in
 # =============================================================================
 
     *)
-        fatal_error 1002 "Invalid or missing --action. Valid actions: create_site, remove_site, plugin, theme, wp_user, wp_settings, wp_db, php_config, redis_config, nginx_config, system, snapshot_site, restore_site, clone_site, destroy_snapshot, list_snapshots"
+        fatal_error 1002 "Invalid or missing --action. Valid actions: create_site, remove_site, plugin, theme, wp_user, wp_settings, wp_db, php_config, redis_config, nginx_config, basic_auth, phpmyadmin, system, snapshot_site, restore_site, clone_site, destroy_snapshot, list_snapshots"
         ;;
 esac

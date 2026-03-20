@@ -120,7 +120,15 @@ chmod 700 /opt/vibestack/config
 systemctl enable --now nginx mariadb postfix
 csf -ra && systemctl restart lfd
 
-# 11. Phone Home
+# 11. Install phpMyAdmin
+echo "Installing phpMyAdmin..."
+source /opt/vibestack/modules/system/phpmyadmin.sh install
+PMA_RESULT="$MODULE_RESULT"
+
+# Re-source vibestack.conf to pick up PMA_PATH, PMA_USER, PMA_PASS
+source /opt/vibestack/config/vibestack.conf
+
+# 12. Phone Home
 SERVER_IP=$(curl -s https://api.ipify.org || hostname -I | awk '{print $1}')
 CONTAINER_UUID=$(cat /etc/machine-id 2>/dev/null || echo "unknown-uuid")
 INSTALL_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -130,6 +138,9 @@ PHONE_HOME_JSON=$(jq -n \
     --arg ip "$SERVER_IP" \
     --arg uuid "$CONTAINER_UUID" \
     --arg date "$INSTALL_DATE" \
+    --arg pma_url "https://${SERVER_HOSTNAME}/${PMA_PATH}/" \
+    --arg pma_user "$PMA_USER" \
+    --arg pma_pass "$PMA_PASS" \
     '{
         success: true,
         errors: [],
@@ -138,7 +149,12 @@ PHONE_HOME_JSON=$(jq -n \
             hostname: $hostname,
             ip: $ip,
             lxd_uuid: $uuid,
-            completed_at: $date
+            completed_at: $date,
+            phpmyadmin: {
+                url: $pma_url,
+                basic_auth_user: $pma_user,
+                basic_auth_pass: $pma_pass
+            }
         }
     }')
 
@@ -151,4 +167,5 @@ echo "===================================================="
 echo "$PHONE_HOME_JSON"
 echo "===================================================="
 echo "Nginx Version: $(nginx -v 2>&1)"
+echo "phpMyAdmin:    https://${SERVER_HOSTNAME}/${PMA_PATH}/"
 echo "Vibestack is ready at /opt/vibestack/"
