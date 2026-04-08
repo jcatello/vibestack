@@ -35,9 +35,12 @@ fi
 rm -f "/etc/systemd/system/${SYSTEMD_SERVICE}"
 systemctl daemon-reload >/dev/null 2>&1
 
-# Remove pool config files across all PHP versions
+# Remove pool config files and per-domain master confs across all PHP versions
 for pool in /etc/opt/remi/php*/php-fpm.d/$DOMAIN.conf; do
     [ -f "$pool" ] && rm -f "$pool"
+done
+for master in /etc/opt/remi/php*/vibestack-${USER_NAME}.conf; do
+    [ -f "$master" ] && rm -f "$master"
 done
 
 # Remove socket if still present

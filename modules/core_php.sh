@@ -114,9 +114,9 @@ if ! rpm -q "${PHP_PKG}-php-pecl-zip" >/dev/null 2>&1; then
 fi
 
 # --- 4. FPM POOL CONFIGURATION ---
-# Note: this pool config is NOT loaded by the shared php84-php-fpm service.
-# It is loaded exclusively by the per-domain systemd unit below, which runs
-# php-fpm with --nodaemonize pointing directly at this pool file.
+# This pool config is loaded ONLY by the per-domain systemd unit via the
+# per-domain master conf (vibestack-DOMAIN.conf). It is NOT in the shared
+# php84-php-fpm scan directory to avoid conflicts with the phpmyadmin pool.
 cat << EOF > "$POOL_CONF"
 [$USER_NAME]
 user = $USER_NAME
@@ -151,6 +151,24 @@ php_admin_value[opcache.enable_cli] = 0
 php_admin_value[opcache.validate_timestamps] = 1
 EOF
 
+# --- 4b. PER-DOMAIN MASTER PHP-FPM CONF ---
+# Each domain gets its own minimal master conf stored outside the shared pool
+# scan directory (/etc/opt/remi/phpXX/php-fpm.d/). This prevents the shared
+# php84-php-fpm service from loading this domain's pool, and prevents the
+# "another FPM instance already listening" conflict on startup.
+PHP_LOG_DIR="/var/opt/remi/${PHP_PKG}/log/php-fpm"
+DOMAIN_MASTER_CONF="/etc/opt/remi/${PHP_PKG}/vibestack-${USER_NAME}.conf"
+
+mkdir -p "$PHP_LOG_DIR"
+
+cat << EOF > "$DOMAIN_MASTER_CONF"
+[global]
+error_log = ${PHP_LOG_DIR}/${USER_NAME}-error.log
+daemonize = no
+
+include=${POOL_CONF}
+EOF
+
 # --- 5. PER-DOMAIN SYSTEMD SERVICE UNIT WITH SANDBOX ISOLATION ---
 #
 # Why a per-domain unit instead of the shared php84-php-fpm service?
@@ -176,7 +194,7 @@ Wants=mariadb.service
 
 [Service]
 Type=notify
-ExecStart=$PHP_FPM_BIN --nodaemonize --fpm-config $PHP_FPM_CONF --fpm-config-allow-unknown-options
+ExecStart=$PHP_FPM_BIN --nodaemonize --fpm-config $DOMAIN_MASTER_CONF
 ExecReload=/bin/kill -USR2 \$MAINPID
 ExecStop=/bin/kill -SIGQUIT \$MAINPID
 PIDFile=/run/php-fpm/${USER_NAME}.pid
@@ -196,6 +214,7 @@ ReadWritePaths=$WEB_ROOT/public
 ReadWritePaths=$WEB_ROOT/logs
 ReadWritePaths=$WEB_ROOT/tmp
 ReadWritePaths=/run/php-fpm
+ReadWritePaths=${PHP_LOG_DIR}
 
 ; Shared readable paths PHP needs (read-only is fine)
 ReadOnlyPaths=/usr/share
@@ -215,8 +234,9 @@ PrivateDevices=yes
 NoNewPrivileges=yes
 
 ; CapabilityBoundingSet: the master PHP-FPM process needs CAP_SETUID/SETGID
-; to drop privileges to the site user for workers. Nothing else is needed.
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
+; to drop privileges to the site user for workers. CAP_CHOWN is needed to
+; set socket ownership. CAP_DAC_OVERRIDE allows crossing file permission checks.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_CHOWN
 
 ; RestrictNamespaces: prevents PHP from creating new kernel namespaces.
 ; A compromised PHP process cannot use this to escape its sandbox.
