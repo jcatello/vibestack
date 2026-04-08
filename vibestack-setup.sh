@@ -120,7 +120,53 @@ chmod 700 /opt/vibestack/config
 systemctl enable --now nginx mariadb postfix
 csf -ra && systemctl restart lfd
 
-# 11. Install phpMyAdmin
+# 11. Install base PHP for phpMyAdmin
+# phpMyAdmin needs a PHP-FPM pool to serve requests. We install php84 as the
+# base system PHP and create a dedicated phpmyadmin pool. This is separate from
+# any per-site pools created by core_php.sh — those get their own vs-php-* units.
+echo "Installing base PHP 8.4 for phpMyAdmin..."
+PMA_PHP_PKG="php84"
+if ! rpm -q "${PMA_PHP_PKG}-php-fpm" >/dev/null 2>&1; then
+    dnf install -y \
+        "${PMA_PHP_PKG}-php-fpm" \
+        "${PMA_PHP_PKG}-php-cli" \
+        "${PMA_PHP_PKG}-php-mysqlnd" \
+        "${PMA_PHP_PKG}-php-mbstring" \
+        "${PMA_PHP_PKG}-php-xml" \
+        "${PMA_PHP_PKG}-php-json" \
+        "${PMA_PHP_PKG}-php-opcache" \
+        >/dev/null 2>&1
+fi
+
+# Create phpmyadmin pool config
+mkdir -p /etc/opt/remi/${PMA_PHP_PKG}/php-fpm.d/
+cat << 'PHPEOF' > /etc/opt/remi/php84/php-fpm.d/phpmyadmin.conf
+[phpmyadmin]
+user = nginx
+group = nginx
+listen = /run/php-fpm/phpmyadmin.sock
+listen.owner = nginx
+listen.group = nginx
+pm = ondemand
+pm.max_children = 5
+pm.process_idle_timeout = 30s
+pm.max_requests = 200
+chdir = /
+PHPEOF
+
+# Start shared php84-php-fpm service for the phpmyadmin pool
+systemctl enable --now php84-php-fpm >/dev/null 2>&1
+
+# Wait for socket
+for i in {1..10}; do
+    [ -S /run/php-fpm/phpmyadmin.sock ] && break
+    sleep 1
+done
+
+chown nginx:nginx /run/php-fpm/phpmyadmin.sock 2>/dev/null || true
+chmod 660 /run/php-fpm/phpmyadmin.sock 2>/dev/null || true
+
+# 12. Install phpMyAdmin
 echo "Installing phpMyAdmin..."
 source /opt/vibestack/modules/system/phpmyadmin.sh install
 PMA_RESULT="$MODULE_RESULT"

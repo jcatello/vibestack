@@ -94,23 +94,22 @@ case "$PMA_ACTION" in
         # 6. Get server hostname for the vhost
         SERVER_HOSTNAME=$(hostname -f)
 
-        # 7. Write Nginx location block into 01-hostname.conf
-        # phpMyAdmin runs on the hostname vhost, not on any customer domain
-        # Inject into existing hostname conf or create a dedicated include
-
-        # Find the best PHP binary available
-        PHP_BIN=$(find /opt/remi/php*/root/usr/bin/php -type f 2>/dev/null | sort -V | tail -1)
-        PHP_PKG=$(find /opt/remi/php*/root/usr/bin/php -type f 2>/dev/null | sort -V | tail -1 | grep -oP 'php\d+')
+        # 7. Determine PHP-FPM socket for phpMyAdmin
+        # vibestack-setup.sh pre-creates a phpmyadmin pool and starts php84-php-fpm
+        # before calling this module, so the socket should already exist.
         PHP_SOCK=""
 
-        # phpMyAdmin needs its own PHP-FPM pool since it runs as root/nginx context
-        # Use the system php-fpm if available, otherwise use first remi php
-        if systemctl is-active "php-fpm" >/dev/null 2>&1; then
+        # Prefer the dedicated phpmyadmin pool socket (set up by vibestack-setup.sh)
+        if [ -S "/run/php-fpm/phpmyadmin.sock" ]; then
+            PHP_SOCK="/run/php-fpm/phpmyadmin.sock"
+        elif systemctl is-active "php-fpm" >/dev/null 2>&1; then
             PHP_SOCK="/run/php-fpm/www.sock"
-        elif [[ -n "$PHP_PKG" ]]; then
-            # Create a dedicated phpmyadmin pool
-            PMA_POOL="/etc/opt/remi/${PHP_PKG}/php-fpm.d/phpmyadmin.conf"
-            cat << EOF > "$PMA_POOL"
+        else
+            # Fallback: find any running Remi PHP-FPM and create a pool
+            PHP_PKG=$(find /opt/remi/php*/root/usr/bin/php -type f 2>/dev/null | sort -V | tail -1 | grep -oP 'php\d+')
+            if [[ -n "$PHP_PKG" ]]; then
+                PMA_POOL="/etc/opt/remi/${PHP_PKG}/php-fpm.d/phpmyadmin.conf"
+                cat << EOF > "$PMA_POOL"
 [phpmyadmin]
 user = nginx
 group = nginx
@@ -125,38 +124,30 @@ chdir = /
 php_admin_value[open_basedir] = ${PMA_BASE}:/tmp:/usr/share:/var/lib/php
 php_admin_value[memory_limit] = 128M
 EOF
-            systemctl reload "${PHP_PKG}-php-fpm" >/dev/null 2>&1
-            sleep 1
-            PHP_SOCK="/run/php-fpm/phpmyadmin.sock"
+                systemctl reload "${PHP_PKG}-php-fpm" >/dev/null 2>&1
+                sleep 2
+                PHP_SOCK="/run/php-fpm/phpmyadmin.sock"
+            fi
         fi
 
         [[ -z "$PHP_SOCK" ]] && fatal_error 5601 "No PHP-FPM socket available for phpMyAdmin"
 
-        # 8. Write Nginx config
+        # 8. Inject phpMyAdmin location block into existing hostname vhost (01-hostname.conf)
+        # We do NOT create a separate server block — that would conflict with 01-hostname.conf
+        # which already owns the hostname on port 443. Instead we inject a location block
+        # into the existing HTTPS server block using the same python3 marker approach as basic_auth.
+        HOSTNAME_VHOST="/etc/nginx/conf.d/01-hostname.conf"
+
+        # Write a standalone include file with the PMA location blocks
         cat << EOF > "$PMA_NGINX_CONF"
-# phpMyAdmin — managed by vibestack
+# phpMyAdmin location blocks — managed by vibestack
+# Included into 01-hostname.conf via inject
 # Path: /${PMA_PATH}
 # Credentials stored in /opt/vibestack/config/vibestack.conf
-
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name ${SERVER_HOSTNAME};
-
-    acme_certificate letsencrypt;
-    ssl_certificate \$acme_certificate;
-    ssl_certificate_key \$acme_certificate_key;
-
-    # Block direct access to everything except our random path
-    location / {
-        return 404;
-    }
 
     location /${PMA_PATH}/ {
         alias ${PMA_BASE}/;
         index index.php;
-
-        # Basic auth protection
         auth_basic "Database Administration";
         auth_basic_user_file ${PMA_HTPASSWD};
 
@@ -177,15 +168,43 @@ server {
             add_header Cache-Control "public";
         }
     }
-}
 EOF
+
+        # Inject the include into the HTTPS server block of 01-hostname.conf
+        if [[ -f "$HOSTNAME_VHOST" ]]; then
+            # Remove any previous PMA injection
+            perl -i -0pe 's|    # PMA_BLOCK_START.*?    # PMA_BLOCK_END\n||gs' "$HOSTNAME_VHOST"
+
+            # Insert include before the last closing brace
+            python3 - "$HOSTNAME_VHOST" "$PMA_NGINX_CONF" << 'PYEOF'
+import sys
+vhost_path = sys.argv[1]
+include_path = sys.argv[2]
+
+with open(vhost_path, 'r') as f:
+    content = f.read()
+
+injection = f"\n    # PMA_BLOCK_START\n    include {include_path};\n    # PMA_BLOCK_END\n"
+
+pos = content.rfind('\n}')
+if pos == -1:
+    pos = content.rfind('}')
+
+content = content[:pos] + injection + content[pos:]
+
+with open(vhost_path, 'w') as f:
+    f.write(content)
+PYEOF
+        else
+            fatal_error 5602 "Hostname vhost not found: $HOSTNAME_VHOST — run vibestack-setup.sh first"
+        fi
 
         # Test and reload nginx
         NGINX_TEST=$(nginx -t 2>&1)
         if [ $? -ne 0 ]; then
             THREAD_TS=$(send_slack_initial "🚨 *Nginx Config Error* after phpMyAdmin install on \`$(hostname)\`" "alerts")
             send_slack_thread "$THREAD_TS" "\`\`\`$NGINX_TEST\`\`\`" "alerts"
-            fatal_error 5602 "Nginx config test failed after phpMyAdmin install."
+            fatal_error 5604 "Nginx config test failed after phpMyAdmin install."
         fi
         systemctl reload nginx >/dev/null 2>&1
 
