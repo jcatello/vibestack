@@ -261,7 +261,7 @@ case "$PHP_ACTION" in
 
         # Update the per-domain systemd unit to point to new PHP binary and conf
         sed -i \
-            -e "s|ExecStart=.*php-fpm.*|ExecStart=${NEW_FPM_BIN} --nodaemonize --fpm-config ${NEW_FPM_CONF} --fpm-config-allow-unknown-options|" \
+            -e "s|ExecStart=.*php-fpm.*|ExecStart=${NEW_FPM_BIN} --nodaemonize --fpm-config ${NEW_FPM_CONF}|" \
             -e "s|ReadOnlyPaths=.*/etc/opt/remi/php.*|ReadOnlyPaths=/etc/opt/remi/${NEW_PKG}|" \
             "$NEW_SYSTEMD_UNIT"
 
