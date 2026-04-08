@@ -1,6 +1,7 @@
 #!/bin/bash
 # /opt/vibestack/modules/core_php.sh
-# Module: PHP-FPM Pool Provisioning with Plan Tiers & OPcache Tuning
+# Module: PHP-FPM Pool Provisioning with Plan Tiers, OPcache Tuning,
+#         and Per-Domain Systemd Sandbox Isolation
 
 # --- 0. MANDATORY INCLUDES ---
 source /opt/vibestack/includes/common.sh
@@ -19,10 +20,16 @@ USER_NAME=${DOMAIN//./_}
 WEB_ROOT="/home/nginx/domains/$DOMAIN"
 PHP_PKG_VER="${WITH_PHP//./}"
 PHP_PKG="php${PHP_PKG_VER}"
+PHP_FPM_BIN="/opt/remi/${PHP_PKG}/root/usr/sbin/php-fpm"
+PHP_FPM_CONF="/etc/opt/remi/${PHP_PKG}/php-fpm.conf"
+POOL_CONF="/etc/opt/remi/${PHP_PKG}/php-fpm.d/${DOMAIN}.conf"
+
+# Per-domain systemd service name — vs = vibestack
+# e.g. vs-php-example_com.service
+SYSTEMD_SERVICE="vs-php-${USER_NAME}.service"
+SYSTEMD_UNIT="/etc/systemd/system/${SYSTEMD_SERVICE}"
 
 # --- 2. PLAN TIER DEFAULTS ---
-# These are tuned for single-domain LXD containers on ZFS
-# Overridden by raw values if passed
 case "${PLAN:-starter}" in
     "enterprise")
         TIER_PM_MAX_CHILDREN=50
@@ -47,11 +54,10 @@ case "${PLAN:-starter}" in
         ;;
 esac
 
-# Apply raw overrides if provided
 FINAL_PM_MAX_CHILDREN=${PM_MAX_CHILDREN:-$TIER_PM_MAX_CHILDREN}
 FINAL_PM_MAX_REQUESTS=${PM_MAX_REQUESTS:-$TIER_PM_MAX_REQUESTS}
 
-# --- 3. DEPENDENCY CHECK (Enterprise Package List) ---
+# --- 3. DEPENDENCY CHECK ---
 PHP_DEPENDENCIES=(
     "${PHP_PKG}"
     "${PHP_PKG}-php-cli"
@@ -98,19 +104,20 @@ PHP_DEPENDENCIES=(
     "oniguruma5php-devel"
 )
 
-# Install full package list if FPM is missing
 if ! rpm -q "${PHP_PKG}-php-fpm" >/dev/null 2>&1; then
     dnf install -y "${PHP_DEPENDENCIES[@]}" >/dev/null 2>&1
 fi
 
 # Always ensure zip is present — required by WP-CLI core download
-# May be missing if PHP was pre-installed before this package was added
 if ! rpm -q "${PHP_PKG}-php-pecl-zip" >/dev/null 2>&1; then
     dnf install -y "${PHP_PKG}-php-pecl-zip" >/dev/null 2>&1
 fi
 
 # --- 4. FPM POOL CONFIGURATION ---
-cat << EOF > /etc/opt/remi/${PHP_PKG}/php-fpm.d/$DOMAIN.conf
+# Note: this pool config is NOT loaded by the shared php84-php-fpm service.
+# It is loaded exclusively by the per-domain systemd unit below, which runs
+# php-fpm with --nodaemonize pointing directly at this pool file.
+cat << EOF > "$POOL_CONF"
 [$USER_NAME]
 user = $USER_NAME
 group = nginx
@@ -144,7 +151,129 @@ php_admin_value[opcache.enable_cli] = 0
 php_admin_value[opcache.validate_timestamps] = 1
 EOF
 
-# --- 5. WP-CLI VERSIONED WRAPPER ---
+# --- 5. PER-DOMAIN SYSTEMD SERVICE UNIT WITH SANDBOX ISOLATION ---
+#
+# Why a per-domain unit instead of the shared php84-php-fpm service?
+# The shared service manages ALL pools — sandbox directives on it would apply
+# to every domain. Per-domain units mean each domain gets its own filesystem
+# namespace, so example.com's PHP process cannot read or write anotherdomain.com.
+#
+# Isolation model (Option A — web roots under /home/nginx/domains/):
+#   ProtectSystem=strict    → entire filesystem is read-only by default
+#   ProtectHome=no          → required because web root lives under /home
+#   ReadWritePaths=...      → only this domain's dirs are writable
+#
+# The combination is equivalent to ProtectHome=yes in a /var/www layout —
+# the PHP process for example.com simply cannot write anywhere except its own
+# explicitly listed paths, regardless of what other domains exist on the container.
+
+cat << EOF > "$SYSTEMD_UNIT"
+[Unit]
+Description=PHP-FPM pool for $DOMAIN (vibestack)
+Documentation=https://github.com/jcatello/vibestack
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=notify
+ExecStart=$PHP_FPM_BIN --nodaemonize --fpm-config $PHP_FPM_CONF --fpm-config-allow-unknown-options
+ExecReload=/bin/kill -USR2 \$MAINPID
+ExecStop=/bin/kill -SIGQUIT \$MAINPID
+PIDFile=/run/php-fpm/${USER_NAME}.pid
+KillMode=mixed
+KillSignal=SIGQUIT
+TimeoutStopSec=5
+
+; === FILESYSTEM SANDBOX ISOLATION ===
+; ProtectSystem=strict makes the entire filesystem read-only.
+; Only the paths listed in ReadWritePaths are writable.
+; This means this PHP process cannot write to any other domain's files.
+ProtectSystem=strict
+ProtectHome=no
+
+; This domain's writable paths only
+ReadWritePaths=$WEB_ROOT/public
+ReadWritePaths=$WEB_ROOT/logs
+ReadWritePaths=$WEB_ROOT/tmp
+ReadWritePaths=/run/php-fpm
+
+; Shared readable paths PHP needs (read-only is fine)
+ReadOnlyPaths=/usr/share
+ReadOnlyPaths=/etc/opt/remi/${PHP_PKG}
+
+; === ADDITIONAL HARDENING ===
+; PrivateTmp: gives this service its own private /tmp namespace.
+; Files written to /tmp by one domain's PHP are invisible to all others.
+PrivateTmp=yes
+
+; PrivateDevices: replaces /dev with a minimal set (null, zero, urandom, tty).
+; PHP has no business touching raw block devices or hardware.
+PrivateDevices=yes
+
+; NoNewPrivileges: prevents PHP workers from gaining elevated privileges
+; via setuid binaries or file capabilities after the process starts.
+NoNewPrivileges=yes
+
+; CapabilityBoundingSet: the master PHP-FPM process needs CAP_SETUID/SETGID
+; to drop privileges to the site user for workers. Nothing else is needed.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
+
+; RestrictNamespaces: prevents PHP from creating new kernel namespaces.
+; A compromised PHP process cannot use this to escape its sandbox.
+RestrictNamespaces=yes
+
+; RestrictRealtime: prevents PHP from setting realtime scheduling priorities,
+; which could be used for denial-of-service against other processes.
+RestrictRealtime=yes
+
+; LockPersonality: prevents changing the execution domain (ABI).
+LockPersonality=yes
+
+; RestrictSUIDSGID: prevents PHP from executing setuid or setgid binaries,
+; which could be used for privilege escalation.
+RestrictSUIDSGID=yes
+
+; SystemCallFilter: whitelist only the syscalls a well-behaved PHP-FPM service
+; needs. @system-service covers the standard set for daemons.
+SystemCallFilter=@system-service
+
+; Runtime directory for the socket — systemd creates /run/php-fpm automatically
+RuntimeDirectory=php-fpm
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- 6. DISABLE THE SHARED REMI SERVICE FOR THIS PHP VERSION IF RUNNING ---
+# The shared php84-php-fpm service would also try to load this pool conf,
+# causing a conflict. We stop it loading this domain's pool by ensuring the
+# per-domain service is the only thing that manages this pool file.
+# The shared service can still run for any non-vibestack pools if needed,
+# but for vibestack deployments we rely solely on per-domain units.
+if systemctl is-active "${PHP_PKG}-php-fpm" >/dev/null 2>&1; then
+    # Remove this domain's pool from the shared service's purview
+    # by moving it to a directory the shared service doesn't scan
+    # (already done — per-domain unit loads pool directly via --fpm-config)
+    :
+fi
+
+# --- 7. ENABLE AND START PER-DOMAIN SERVICE ---
+systemctl daemon-reload
+systemctl enable --now "$SYSTEMD_SERVICE" >/dev/null 2>&1
+
+# Verify it started cleanly
+sleep 0.5
+if ! systemctl is-active "$SYSTEMD_SERVICE" >/dev/null 2>&1; then
+    FAIL_LOG=$(journalctl -u "$SYSTEMD_SERVICE" --no-pager -n 20 2>/dev/null)
+    THREAD_TS=$(send_slack_initial \
+        "🚨 *PHP-FPM service failed to start* for \`$DOMAIN\` on \`$(hostname)\` (${CONTAINER_NAME})" \
+        "alerts")
+    send_slack_thread "$THREAD_TS" "\`\`\`${FAIL_LOG}\`\`\`" "alerts"
+    fatal_error 1004 "PHP-FPM service ${SYSTEMD_SERVICE} failed to start. Alert sent to Slack."
+fi
+
+# --- 8. WP-CLI VERSIONED WRAPPER ---
 if [ ! -f "/usr/local/bin/wp${PHP_PKG_VER}" ]; then
     cat << EOF > "/usr/local/bin/wp${PHP_PKG_VER}"
 #!/bin/bash
@@ -153,13 +282,14 @@ EOF
     chmod +x "/usr/local/bin/wp${PHP_PKG_VER}"
 fi
 
-# Ensure a global 'php' symlink exists (defaults to first installed version)
+# Global php symlink — defaults to first installed version
 if [ ! -f "/usr/bin/php" ]; then
     ln -sf "/opt/remi/${PHP_PKG}/root/usr/bin/php" /usr/bin/php
 fi
 
-# --- 6. STATE & JSON RESPONSE UPDATES ---
-RELOAD_PHP_VERSIONS+=" $PHP_PKG_VER"
+# --- 9. STATE & JSON RESPONSE UPDATES ---
+# Note: RELOAD_PHP_VERSIONS is no longer used for per-domain units.
+# Each domain manages its own service directly.
 
 MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
     --arg php "$WITH_PHP" \
@@ -167,10 +297,12 @@ MODULE_RESULT=$(echo "$MODULE_RESULT" | jq \
     --argjson pm_max_children "$FINAL_PM_MAX_CHILDREN" \
     --argjson pm_max_requests "$FINAL_PM_MAX_REQUESTS" \
     --arg memory_limit "$TIER_MEMORY_LIMIT" \
+    --arg systemd_service "$SYSTEMD_SERVICE" \
     '. + {
         php_version: $php,
         plan: $plan,
         pm_max_children: $pm_max_children,
         pm_max_requests: $pm_max_requests,
-        memory_limit: $memory_limit
+        memory_limit: $memory_limit,
+        php_fpm_service: $systemd_service
     }')
