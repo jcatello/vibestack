@@ -3,12 +3,21 @@
 # Vibestack Shared Functions & Configuration Loader
 
 # --- CONFIG LOADER ---
+# During vibestack-setup.sh the config file does not exist yet.
+# We only fatal if we're NOT in setup context — setup writes the conf itself.
 CONFIG_FILE="/opt/vibestack/config/vibestack.conf"
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 else
-    echo '{"success":false,"errors":[{"code":1,"message":"FATAL: Missing config file at /opt/vibestack/config/vibestack.conf"}],"messages":[],"result":null}'
-    exit 1
+    # Allow setup to proceed without a conf file.
+    # Any API call (not setup) will hit fatal_error 2000 on verify_uid
+    # since CONTAINER_NAME will be empty — safe fallback.
+    SLACK_WEBHOOK_URL=""
+    SLACK_TOKEN=""
+    CONTAINER_NAME=""
+    SERVICE_ID=""
+    ZFS_NODE=""
+    ZFS_LXD_BASE=""
 fi
 
 export SLACK_WEBHOOK_URL
@@ -41,6 +50,10 @@ verify_uid() {
         fatal_error 2000 "Missing required parameter: --uid"
     fi
 
+    if [[ -z "$CONTAINER_NAME" ]]; then
+        fatal_error 2000 "Container UID not configured — vibestack.conf missing or incomplete"
+    fi
+
     if [[ "$incoming_uid" != "$CONTAINER_NAME" ]]; then
         # Fire Slack alert — this should never happen in production
         local hostname
@@ -63,6 +76,7 @@ verify_uid() {
 send_slack_initial() {
     local message="$1"
     local channel="${2:-test}"
+    if [[ -z "$SLACK_WEBHOOK_URL" ]]; then return; fi
     curl -s -X POST "$SLACK_WEBHOOK_URL" \
         -H "Authorization: Bearer $SLACK_TOKEN" \
         -H "Content-Type: application/json" \
@@ -76,11 +90,10 @@ send_slack_thread() {
     local thread_id="$1"
     local message="$2"
     local channel="${3:-test}"
-    if [ -n "$thread_id" ]; then
-        curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H "Authorization: Bearer $SLACK_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"message\": \"$message\", \"channel\": \"$channel\", \"parent_msg_id\": \"$thread_id\"}" \
-        > /dev/null
-    fi
+    if [[ -z "$SLACK_WEBHOOK_URL" || -z "$thread_id" ]]; then return; fi
+    curl -s -X POST "$SLACK_WEBHOOK_URL" \
+        -H "Authorization: Bearer $SLACK_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"message\": \"$message\", \"channel\": \"$channel\", \"parent_msg_id\": \"$thread_id\"}" \
+    > /dev/null
 }
