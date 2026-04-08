@@ -12,7 +12,7 @@ PMA_ACTION=${1:-"install"}
 # PMA_PATH, PMA_USER, PMA_PASS are read/written here
 CONF_FILE="/opt/vibestack/config/vibestack.conf"
 PMA_BASE="/usr/share/phpmyadmin"
-PMA_NGINX_CONF="/etc/nginx/conf.d/00-phpmyadmin.conf"
+PMA_NGINX_CONF="/etc/nginx/vibestack-pma-locations.conf"
 PMA_HTPASSWD="/etc/nginx/auth/phpmyadmin.htpasswd"
 HTPASSWD_DIR="/etc/nginx/auth"
 
