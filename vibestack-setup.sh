@@ -25,23 +25,37 @@ EOF
 dnf install -y epel-release
 dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
 
-# 3. Install Base Dependencies
-dnf install -y nginx nginx-module-acme mariadb-server curl wget unzip \
-               logrotate openssl ipset iptables perl-libwww-perl bind-utils \
-               postfix jq
+# 3. Add MariaDB 11.4 LTS official repo (overrides AlmaLinux 9 default 10.5)
+curl -LsS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup \
+    | bash -s -- --mariadb-server-version=11.4 --skip-maxscale
 
-# 4. Load the ACME Module into Nginx
+# 4. Install Base Dependencies
+dnf install -y nginx nginx-module-acme MariaDB-server MariaDB-client \
+               curl wget unzip logrotate openssl ipset iptables \
+               perl-libwww-perl bind-utils postfix jq python3
+
+# 5. Load the ACME Module into Nginx
 if ! grep -q "ngx_http_acme_module.so" /etc/nginx/nginx.conf; then
     sed -i '1iload_module modules/ngx_http_acme_module.so;' /etc/nginx/nginx.conf
 fi
 
-# 5. Standardized Paths & Cleanup
+# Add server_names_hash_bucket_size to http block — required for long hostnames
+# e.g. wpo-container-name.bigscoots-wpo.com
+if ! grep -q "server_names_hash_bucket_size" /etc/nginx/nginx.conf; then
+    sed -i '/http {/a\    server_names_hash_bucket_size 128;' /etc/nginx/nginx.conf
+fi
+
+# 6. Standardized Paths & Cleanup
 mkdir -p /home/nginx/domains
 rm -f /etc/nginx/conf.d/default.conf
 
 # PHP Socket Persistence (Fixes AlmaLinux 9 tmpfs wipe on reboot)
 echo "d /run/php-fpm 0755 nginx nginx -" > /etc/tmpfiles.d/php-fpm.conf
 mkdir -p /run/php-fpm && chown nginx:nginx /run/php-fpm
+
+# Redis socket persistence
+echo "d /run/redis 0755 root root -" > /etc/tmpfiles.d/redis.conf
+mkdir -p /run/redis
 
 # 6. Global HTTPS Redirect & Native ACME State Directory
 mkdir -p /var/lib/nginx/acme
@@ -117,8 +131,30 @@ chmod 600 /opt/vibestack/config/vibestack.conf
 chmod 700 /opt/vibestack/config
 
 # 10. Start Base Services
-systemctl enable --now nginx mariadb postfix
+systemctl enable --now nginx MariaDB postfix
 csf -ra && systemctl restart lfd
+
+# Disable system PHP-FPM pools — vibestack uses per-domain units only.
+# The system php-fpm and shared Remi php84-php-fpm both start www pools
+# running as apache, wasting memory and conflicting with per-domain isolation.
+systemctl stop php-fpm php84-php-fpm 2>/dev/null || true
+systemctl disable php-fpm php84-php-fpm 2>/dev/null || true
+
+# MariaDB: disable reverse DNS on connections — prevents 2-3s delays on WP-CLI
+# and PHP DB connections when DNS is slow or unavailable
+if ! grep -q "skip-name-resolve" /etc/my.cnf.d/server.cnf 2>/dev/null; then
+    cat << 'EOF' >> /etc/my.cnf.d/server.cnf
+
+[mysqld]
+skip-name-resolve
+innodb_buffer_pool_size = 128M
+query_cache_type = 0
+EOF
+    systemctl restart MariaDB
+fi
+
+# Global php symlink — points to php84 by default
+ln -sf /opt/remi/php84/root/usr/bin/php /usr/bin/php
 
 # 11. Install base PHP for phpMyAdmin
 # phpMyAdmin needs a PHP-FPM pool to serve requests. We install php84 as the
@@ -154,8 +190,43 @@ pm.max_requests = 200
 chdir = /
 PHPEOF
 
-# Start shared php84-php-fpm service for the phpmyadmin pool
-systemctl enable --now php84-php-fpm >/dev/null 2>&1
+# Create per-service master conf for phpMyAdmin (same pattern as per-domain sites)
+PHP_PMA_LOG_DIR="/var/opt/remi/${PMA_PHP_PKG}/log/php-fpm"
+mkdir -p "$PHP_PMA_LOG_DIR"
+
+cat << 'MASTEREOF' > /etc/opt/remi/php84/vibestack-phpmyadmin.conf
+[global]
+error_log = /var/opt/remi/php84/log/php-fpm/phpmyadmin-error.log
+daemonize = no
+
+include=/etc/opt/remi/php84/php-fpm.d/phpmyadmin.conf
+MASTEREOF
+
+# Create dedicated systemd unit for phpMyAdmin PHP-FPM
+# This avoids enabling the shared php84-php-fpm service which causes
+# boot-time race conditions with per-domain vs-php-* units
+cat << 'UNITEOF' > /etc/systemd/system/vs-php-phpmyadmin.service
+[Unit]
+Description=PHP-FPM pool for phpMyAdmin (vibestack)
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/opt/remi/php84/root/usr/sbin/php-fpm --nodaemonize --fpm-config /etc/opt/remi/php84/vibestack-phpmyadmin.conf
+ExecReload=/bin/kill -USR2 $MAINPID
+ExecStop=/bin/kill -SIGQUIT $MAINPID
+KillMode=mixed
+KillSignal=SIGQUIT
+TimeoutStopSec=5
+RuntimeDirectory=php-fpm
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable --now vs-php-phpmyadmin >/dev/null 2>&1
 
 # Wait for socket
 for i in {1..10}; do

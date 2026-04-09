@@ -59,49 +59,25 @@ FINAL_PM_MAX_REQUESTS=${PM_MAX_REQUESTS:-$TIER_PM_MAX_REQUESTS}
 
 # --- 3. DEPENDENCY CHECK ---
 PHP_DEPENDENCIES=(
-    "${PHP_PKG}"
-    "${PHP_PKG}-php-cli"
     "${PHP_PKG}-php-fpm"
-    "${PHP_PKG}-php-devel"
-    "${PHP_PKG}-php-embedded"
+    "${PHP_PKG}-php-cli"
     "${PHP_PKG}-php-mysqlnd"
-    "${PHP_PKG}-php-bcmath"
-    "${PHP_PKG}-php-enchant"
+    "${PHP_PKG}-php-pdo"
     "${PHP_PKG}-php-gd"
-    "${PHP_PKG}-php-pecl-geoip"
-    "${PHP_PKG}-php-gmp"
-    "${PHP_PKG}-php-pecl-igbinary"
-    "${PHP_PKG}-php-pecl-igbinary-devel"
-    "${PHP_PKG}-php-pecl-imagick-im6"
-    "${PHP_PKG}-php-pecl-imagick-im6-devel"
-    "${PHP_PKG}-php-imap"
-    "${PHP_PKG}-php-intl"
-    "${PHP_PKG}-php-pecl-json-post"
-    "${PHP_PKG}-php-ldap"
-    "${PHP_PKG}-php-pecl-mailparse"
     "${PHP_PKG}-php-mbstring"
-    "${PHP_PKG}-php-mcrypt"
-    "${PHP_PKG}-php-pecl-memcache"
-    "${PHP_PKG}-php-pecl-memcached"
-    "${PHP_PKG}-php-pecl-mysql"
-    "${PHP_PKG}-php-pdo-dblib"
-    "${PHP_PKG}-php-pspell"
-    "${PHP_PKG}-php-pecl-redis5"
-    "${PHP_PKG}-php-snmp"
-    "${PHP_PKG}-php-soap"
-    "${PHP_PKG}-php-tidy"
     "${PHP_PKG}-php-xml"
-    "${PHP_PKG}-php-xmlrpc"
-    "${PHP_PKG}-php-pecl-zip"
     "${PHP_PKG}-php-opcache"
+    "${PHP_PKG}-php-pecl-imagick-im6"
+    "${PHP_PKG}-php-pecl-zip"
+    "${PHP_PKG}-php-intl"
+    "${PHP_PKG}-php-bcmath"
+    "${PHP_PKG}-php-soap"
     "${PHP_PKG}-php-sodium"
-    "${PHP_PKG}-php-brotli"
-    "${PHP_PKG}-php-zstd"
-    "${PHP_PKG}-php-zstd-devel"
+    "${PHP_PKG}-php-pecl-redis6"
+    "${PHP_PKG}-php-pecl-igbinary"
     "${PHP_PKG}-php-process"
-    "libsodium-devel"
-    "oniguruma5php"
-    "oniguruma5php-devel"
+    "${PHP_PKG}-php-pecl-imagick-im6-devel"
+    "${PHP_PKG}-php-pecl-igbinary-devel"
 )
 
 if ! rpm -q "${PHP_PKG}-php-fpm" >/dev/null 2>&1; then
@@ -191,6 +167,7 @@ Description=PHP-FPM pool for $DOMAIN (vibestack)
 Documentation=https://github.com/jcatello/vibestack
 After=network.target mariadb.service
 Wants=mariadb.service
+Conflicts=php84-php-fpm.service php82-php-fpm.service php83-php-fpm.service php-fpm.service
 
 [Service]
 Type=notify

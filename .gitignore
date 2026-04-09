@@ -1,11 +1,5 @@
-# /opt/vibestack/.gitignore
-
-# Never commit credentials
+# Never commit credentials or logs
 config/vibestack.conf
-
-# Never commit logs
-logs/
-
-# Temp files
+logs/*.log
 *.tmp
 *.bak
