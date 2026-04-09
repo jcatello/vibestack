@@ -24,7 +24,11 @@ if ! rpm -q redis >/dev/null 2>&1; then
 fi
 
 # --- 3. DIRECTORY SETUP ---
+# Always fix permissions regardless of install state — system redis package
+# sets /etc/redis to 750 redis:root which blocks site users from reading confs
 mkdir -p /run/redis /etc/redis /var/log/redis "$REDIS_DATADIR"
+chmod 755 /etc/redis /var/log/redis /var/lib/redis
+chmod 755 "$REDIS_DATADIR"
 chown "$USER_NAME:$USER_NAME" "$REDIS_DATADIR"
 chown nginx:nginx /run/redis
 
@@ -64,9 +68,9 @@ EOF
 # Capture the generated password for the JSON response
 REDIS_PASSWORD=$(grep "requirepass" "$REDIS_CONF" | awk '{print $2}')
 
-# Set permissions — only site user and nginx can access
-chown "${USER_NAME}:nginx" "$REDIS_CONF"
-chmod 640 "$REDIS_CONF"
+# Set permissions — readable by site user for redis-server to load
+chown root:root "$REDIS_CONF"
+chmod 644 "$REDIS_CONF"
 
 # --- 5. SYSTEMD SERVICE (per-site instance) ---
 cat << EOF > "/etc/systemd/system/${REDIS_SERVICE}.service"

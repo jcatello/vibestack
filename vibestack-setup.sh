@@ -130,6 +130,12 @@ sed -i 's|^#CSF_HIGHRISK|CSF_HIGHRISK|' $BLOCK
 chmod 600 /opt/vibestack/config/vibestack.conf
 chmod 700 /opt/vibestack/config
 
+# 9b. Set SSH to port 2222
+# Use drop-in file so we don't modify the main sshd_config
+echo "Port 2222" > /etc/ssh/sshd_config.d/99-vibestack.conf
+chmod 600 /etc/ssh/sshd_config.d/99-vibestack.conf
+systemctl restart sshd
+
 # 10. Start Base Services
 systemctl daemon-reload
 systemctl enable --now nginx mariadb postfix

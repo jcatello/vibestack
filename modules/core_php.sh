@@ -100,6 +100,7 @@ group = nginx
 listen = /run/php-fpm/$DOMAIN.sock
 listen.owner = nginx
 listen.group = nginx
+listen.mode = 0660
 
 ; Pool sizing — plan: ${PLAN:-starter}
 pm = ondemand
@@ -115,6 +116,7 @@ php_admin_value[upload_tmp_dir] = $WEB_ROOT/tmp
 php_admin_value[session.save_path] = $WEB_ROOT/tmp
 php_admin_value[memory_limit] = $TIER_MEMORY_LIMIT
 php_admin_flag[allow_url_fopen] = off
+php_admin_value[disable_functions] = exec,shell_exec,system,passthru,proc_open,popen,pclose,proc_close,proc_get_status,proc_nice,proc_terminate,pcntl_exec,pcntl_alarm,pcntl_fork,pcntl_waitpid,pcntl_wait,pcntl_wifexited,pcntl_wifstopped,pcntl_wifsignaled,pcntl_wexitstatus,pcntl_wtermsig,pcntl_wstopsig,pcntl_signal,pcntl_signal_dispatch,pcntl_get_last_error,pcntl_strerror,pcntl_sigprocmask,pcntl_sigwaitinfo,pcntl_sigtimedwait,pcntl_getpriority,pcntl_setpriority,posix_kill,posix_mkfifo,posix_setpgid,posix_setsid,posix_setuid,posix_getpwuid,posix_uname,symlink,link,dl,show_source,highlight_file,apache_child_terminate,apache_get_modules,apache_get_version,apache_getenv,apache_note,apache_setenv,disk_total_space,diskfreespace,getmypid,getmyuid,getmygid,getrusage,getmyinode,get_current_user,libxml_disable_entity_loader
 
 ; OPcache — tuned for plan: ${PLAN:-starter}
 php_admin_value[opcache.enable] = 1
@@ -172,6 +174,7 @@ Conflicts=php84-php-fpm.service php82-php-fpm.service php83-php-fpm.service php-
 [Service]
 Type=notify
 ExecStart=$PHP_FPM_BIN --nodaemonize --fpm-config $DOMAIN_MASTER_CONF
+ExecStartPost=/bin/sh -c 'sleep 1; chown nginx:nginx /run/php-fpm/${DOMAIN}.sock; chmod 660 /run/php-fpm/${DOMAIN}.sock'
 ExecReload=/bin/kill -USR2 \$MAINPID
 ExecStop=/bin/kill -SIGQUIT \$MAINPID
 PIDFile=/run/php-fpm/${USER_NAME}.pid
@@ -233,10 +236,6 @@ RestrictSUIDSGID=yes
 ; SystemCallFilter: whitelist only the syscalls a well-behaved PHP-FPM service
 ; needs. @system-service covers the standard set for daemons.
 SystemCallFilter=@system-service
-
-; Runtime directory for the socket — systemd creates /run/php-fpm automatically
-RuntimeDirectory=php-fpm
-RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target

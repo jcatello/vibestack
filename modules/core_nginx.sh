@@ -39,6 +39,10 @@ PRIVATE_KEY=$(cat "$WEB_ROOT/.ssh/id_ed25519")
 chown -R "$USER_NAME:$USER_NAME" "$WEB_ROOT"
 chmod 750 "$WEB_ROOT"
 
+# Logs dir must be writable by nginx (which runs as nginx user, member of site group)
+chown "$USER_NAME:nginx" "$WEB_ROOT/logs"
+chmod 775 "$WEB_ROOT/logs"
+
 # --- 5. NGINX VHOST CONFIGURATION (Native ACME) ---
 cat << EOF > /etc/nginx/conf.d/$DOMAIN.conf
 # HTTP Server Block (Redirects to HTTPS, ACME natively intercepts challenges)
