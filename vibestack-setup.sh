@@ -131,26 +131,30 @@ chmod 600 /opt/vibestack/config/vibestack.conf
 chmod 700 /opt/vibestack/config
 
 # 10. Start Base Services
-systemctl enable --now nginx MariaDB postfix
+systemctl daemon-reload
+systemctl enable --now nginx mariadb postfix
 csf -ra && systemctl restart lfd
 
 # Disable system PHP-FPM pools — vibestack uses per-domain units only.
-# The system php-fpm and shared Remi php84-php-fpm both start www pools
-# running as apache, wasting memory and conflicting with per-domain isolation.
 systemctl stop php-fpm php84-php-fpm 2>/dev/null || true
 systemctl disable php-fpm php84-php-fpm 2>/dev/null || true
 
-# MariaDB: disable reverse DNS on connections — prevents 2-3s delays on WP-CLI
-# and PHP DB connections when DNS is slow or unavailable
-if ! grep -q "skip-name-resolve" /etc/my.cnf.d/server.cnf 2>/dev/null; then
-    cat << 'EOF' >> /etc/my.cnf.d/server.cnf
+# MariaDB: disable reverse DNS on connections
+# MariaDB 11.4 config path varies — try both locations
+MARIADB_CONF=""
+[ -f /etc/my.cnf.d/server.cnf ] && MARIADB_CONF="/etc/my.cnf.d/server.cnf"
+[ -f /etc/mysql/conf.d/mysql.cnf ] && MARIADB_CONF="/etc/mysql/conf.d/mysql.cnf"
+[ -z "$MARIADB_CONF" ] && MARIADB_CONF="/etc/my.cnf.d/server.cnf" && mkdir -p /etc/my.cnf.d
+
+if [[ -n "$MARIADB_CONF" ]] && ! grep -q "skip-name-resolve" "$MARIADB_CONF" 2>/dev/null; then
+    cat << 'EOF' >> "$MARIADB_CONF"
 
 [mysqld]
 skip-name-resolve
 innodb_buffer_pool_size = 128M
 query_cache_type = 0
 EOF
-    systemctl restart MariaDB
+    systemctl restart mariadb
 fi
 
 # Global php symlink — points to php84 by default
