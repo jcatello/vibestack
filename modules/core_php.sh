@@ -174,7 +174,6 @@ Conflicts=php84-php-fpm.service php82-php-fpm.service php83-php-fpm.service php-
 [Service]
 Type=notify
 ExecStart=$PHP_FPM_BIN --nodaemonize --fpm-config $DOMAIN_MASTER_CONF
-ExecStartPost=/bin/sh -c 'sleep 1; chown nginx:nginx /run/php-fpm/${DOMAIN}.sock; chmod 660 /run/php-fpm/${DOMAIN}.sock'
 ExecReload=/bin/kill -USR2 \$MAINPID
 ExecStop=/bin/kill -SIGQUIT \$MAINPID
 PIDFile=/run/php-fpm/${USER_NAME}.pid
@@ -208,10 +207,6 @@ PrivateTmp=yes
 ; PrivateDevices: replaces /dev with a minimal set (null, zero, urandom, tty).
 ; PHP has no business touching raw block devices or hardware.
 PrivateDevices=yes
-
-; NoNewPrivileges: prevents PHP workers from gaining elevated privileges
-; via setuid binaries or file capabilities after the process starts.
-NoNewPrivileges=yes
 
 ; CapabilityBoundingSet: the master PHP-FPM process needs CAP_SETUID/SETGID
 ; to drop privileges to the site user for workers. CAP_CHOWN is needed to

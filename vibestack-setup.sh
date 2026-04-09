@@ -248,7 +248,6 @@ chown nginx:nginx /run/php-fpm/phpmyadmin.sock 2>/dev/null || true
 chmod 660 /run/php-fpm/phpmyadmin.sock 2>/dev/null || true
 
 # 12. Install phpMyAdmin
-echo "Installing phpMyAdmin..."
 source /opt/vibestack/modules/system/phpmyadmin.sh install
 PMA_RESULT="$MODULE_RESULT"
 
